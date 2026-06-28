@@ -173,8 +173,18 @@ function updateGesture() {
 
 viewportEl.addEventListener("pointerdown", (e) => {
   if (!currentPath) return;
-  viewportEl.setPointerCapture(e.pointerId);
+  // Stop the browser from starting a native text selection on the Preview DOM
+  // underneath the overlay while drawing/panning. This is a markup tool, not a
+  // text copier — selection is disabled outright (see also user-select in CSS).
+  e.preventDefault();
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+  // Capture so we keep receiving move/up even if the finger leaves the element.
+  // Guard: can throw NotFoundError (e.g. synthetic events) — must never abort routing.
+  try {
+    viewportEl.setPointerCapture(e.pointerId);
+  } catch {
+    /* capture is best-effort */
+  }
 
   if (e.pointerType === "touch") {
     const tIds = touchIds();
@@ -197,6 +207,7 @@ viewportEl.addEventListener("pointerdown", (e) => {
 viewportEl.addEventListener("pointermove", (e) => {
   const p = pointers.get(e.pointerId);
   if (!p) return;
+  e.preventDefault(); // suppress native selection/scroll while a pointer is active
   p.x = e.clientX;
   p.y = e.clientY;
 
@@ -212,6 +223,13 @@ viewportEl.addEventListener("pointermove", (e) => {
 });
 
 function endPointer(e: PointerEvent) {
+  try {
+    if (viewportEl.hasPointerCapture(e.pointerId)) {
+      viewportEl.releasePointerCapture(e.pointerId);
+    }
+  } catch {
+    /* best-effort */
+  }
   if (e.pointerId === drawPointerId) {
     engine.end();
     drawPointerId = null;

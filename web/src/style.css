@@ -181,6 +181,11 @@ body {
   background: var(--bg);
   touch-action: none; /* we handle pan/zoom ourselves */
   cursor: crosshair;
+  /* markup tool, not a text copier — block native text selection on the
+     Preview DOM underneath while drawing/panning */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 #page {
   position: absolute;
@@ -195,6 +200,8 @@ body {
   width: 800px;
   padding: 32px 40px;
   background: #fff;
+  user-select: none;
+  -webkit-user-select: none;
 }
 canvas#ink {
   position: absolute;
