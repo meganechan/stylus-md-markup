@@ -91,9 +91,10 @@ async function openJob(id: string) {
   }
   const ink = await loadJobStrokes(id);
   await afterBackdropLoaded(ink.strokes ?? []);
-  // surface a prior te-kb publish (helps decide whether to re-publish)
-  if (job.lastPaste) {
-    resultText.innerHTML = `📚 job นี้เคยลง KB แล้ว: <a href="${job.lastPaste.url}" target="_blank">${job.lastPaste.url}</a>`;
+  // surface a prior te-kb publish (appended ref, or a fallback new paste)
+  const prior = job.appendedTo ?? job.lastPaste;
+  if (prior) {
+    resultText.innerHTML = `📚 job นี้ลง KB แล้ว: <a href="${prior.url}" target="_blank">${prior.url}</a>`;
     resultBanner.hidden = false;
   }
 }
@@ -128,74 +129,55 @@ function watchImages() {
 }
 
 // ---------------------------------------------------------------------------
-// Save → create/update Markup Job
+// Save KB — the single save action: persist the Markup Job (bake tiles) then
+// post-back to te-kb (append a ref to the source paste, or create a new paste).
+// PNG download is the only other action. (No separate local-only save.)
 // ---------------------------------------------------------------------------
-async function doSave(skipBanner = false) {
+
+// Persist the job (bake tiles + POST). Returns the manifest, or null on failure.
+async function saveCurrentJob(): Promise<JobManifest | null> {
+  if (!backdropType) return null;
+  const tiles = await bakeTiles(previewEl, inkCanvas, viewport);
+  const { width, height } = engine.pageSize();
+  const manifest = await saveJob({
+    type: backdropType,
+    jobId: currentJobId ?? undefined,
+    mdText: backdropType === "md" ? currentMdText ?? "" : undefined,
+    backdropRef: currentBackdropRef ?? undefined,
+    pageWidth: width,
+    pageHeight: height,
+    strokes: { version: 1, strokes: engine.getStrokes(), pageWidth: width, pageHeight: height },
+    backdrop: backdropType === "image" && !currentJobId ? currentBackdropBlob ?? undefined : undefined,
+    tiles,
+  });
+  currentJobId = manifest.id;
+  history.replaceState(null, "", `/?job=${manifest.id}`);
+  dirty = false;
+  return manifest;
+}
+
+async function doSaveKB() {
   if (!backdropType) return;
-  const btn = $<HTMLButtonElement>("#btn-save");
+  const btn = $<HTMLButtonElement>("#btn-savekb");
   const prev = btn.textContent;
   btn.disabled = true;
   btn.textContent = "กำลังบันทึก…";
   try {
-    const tiles = await bakeTiles(previewEl, inkCanvas, viewport);
-    const { width, height } = engine.pageSize();
-    const manifest = await saveJob({
-      type: backdropType,
-      jobId: currentJobId ?? undefined,
-      mdText: backdropType === "md" ? currentMdText ?? "" : undefined,
-      backdropRef: currentBackdropRef ?? undefined,
-      pageWidth: width,
-      pageHeight: height,
-      strokes: { version: 1, strokes: engine.getStrokes(), pageWidth: width, pageHeight: height },
-      // backdrop bytes only needed when first creating an image job
-      backdrop: backdropType === "image" && !currentJobId ? currentBackdropBlob ?? undefined : undefined,
-      tiles,
-    });
-    currentJobId = manifest.id;
-    history.replaceState(null, "", `/?job=${manifest.id}`);
-    dirty = false;
-    if (!skipBanner) showResult(manifest, tiles.length);
-  } catch (err) {
-    alert("บันทึกล้มเหลว: " + (err as Error).message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = prev;
-  }
-}
-
-function showResult(m: JobManifest, tileCount: number) {
-  let html =
-    `✅ บันทึกแล้ว job <b>${m.id}</b> · ${tileCount} tiles · ` +
-    `<a href="${m.resultUrl}" target="_blank">เปิดหน้าผล</a> · ` +
-    `<a href="/api/jobs/${m.id}" target="_blank">manifest</a>`;
-  if (m.lastPaste) html += ` · 📚 <a href="${m.lastPaste.url}" target="_blank">KB</a>`;
-  resultText.innerHTML = html;
-  resultBanner.hidden = false;
-}
-
-// Post-back to te-kb. Factored so it works as a manual button OR (later) auto on
-// Save. Requires a saved job — saves first if needed. Token lives server-side; a
-// server with no token returns reason:"no-token" and we say so without erroring.
-async function publishCurrent() {
-  if (!backdropType) return;
-  const btn = $<HTMLButtonElement>("#btn-publish");
-  const prev = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "กำลังลง KB…";
-  try {
-    if (!currentJobId) await doSave(/*skipBanner*/ true);
-    if (!currentJobId) return;
-    const res = await publishJob(currentJobId);
+    const manifest = await saveCurrentJob();
+    if (!manifest) return;
+    // post-back: append a ref to the source paste, or create a new paste
+    const res = await publishJob(manifest.id);
     if (res.published && res.url) {
-      resultText.innerHTML = `✅ บันทึกเข้า KB: <a href="${res.url}" target="_blank">${res.url}</a>`;
+      const where = res.mode === "append" ? "เพิ่มใน paste เดิม" : "paste ใหม่";
+      resultText.innerHTML = `✅ บันทึกเข้า KB (${where}): <a href="${res.url}" target="_blank">${res.url}</a>`;
     } else if (res.reason === "no-token") {
-      resultText.innerHTML = `ℹ️ เซิร์ฟเวอร์นี้ยังไม่ได้ตั้งค่า post-back (job บันทึก local แล้ว)`;
+      resultText.innerHTML = `ℹ️ บันทึก job แล้ว (เซิร์ฟเวอร์นี้ยังไม่ได้ตั้งค่า post-back KB)`;
     } else {
-      resultText.innerHTML = `⚠️ บันทึก KB ไม่สำเร็จ: ${res.error ?? "unknown"} (job local ยังอยู่)`;
+      resultText.innerHTML = `⚠️ บันทึก job แล้ว แต่ลง KB ไม่สำเร็จ: ${res.error ?? "unknown"}`;
     }
     resultBanner.hidden = false;
   } catch (err) {
-    resultText.innerHTML = `⚠️ บันทึก KB ไม่สำเร็จ: ${(err as Error).message}`;
+    resultText.innerHTML = `⚠️ บันทึกล้มเหลว: ${(err as Error).message}`;
     resultBanner.hidden = false;
   } finally {
     btn.disabled = false;
@@ -395,9 +377,8 @@ function buildToolbar() {
   right.className = "tgroup right";
   right.append(
     button("⬇️ PNG", "ดาวน์โหลด PNG", doDownloadPng, "btn-png"),
-    button("📤 KB", "บันทึก + ลง te-kb (สร้าง paste)", () => void publishCurrent(), "btn-publish"),
     (() => {
-      const b = button("💾 Save Job", "บันทึกเป็น Markup Job", () => void doSave(), "btn-save");
+      const b = button("💾 Save KB", "บันทึก + ลง te-kb", () => void doSaveKB(), "btn-savekb");
       b.classList.add("primary");
       return b;
     })(),
@@ -438,7 +419,7 @@ function syncToolbarState() {
     finger.textContent = fingerMode === "draw" ? "✋วาด" : "✋เลื่อน";
   }
   const hasBackdrop = !!backdropType;
-  for (const id of ["btn-save", "btn-png", "btn-publish"]) {
+  for (const id of ["btn-savekb", "btn-png"]) {
     const b = $<HTMLButtonElement>("#" + id);
     if (b) b.disabled = !hasBackdrop;
   }
@@ -475,7 +456,7 @@ window.addEventListener("keydown", (e) => {
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
-    void doSave();
+    void doSaveKB();
   }
 });
 

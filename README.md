@@ -49,11 +49,11 @@ Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
 
 **Env**: `DOCS_DIR` (md backdrop, :ro) · `JOBS_DIR` (job store, default `./jobs-data`) · `PORT` (8080) · `MAX_UPLOAD` (10MB).
 
-**Post-back to te-kb (ADR-0006)** — Save → publish ผลเป็น paste ใน te-kb (โชว์ markup ใน KB). เป็น **server-side** ล้วน; token อยู่ env เท่านั้น ไม่โผล่ frontend.
-- `TEKB_PASTE_TOKEN` — paste-only token (ไม่ตั้ง → publish ถูก skip เงียบ, job local ยังเซฟปกติ)
-- `TEKB_BASE_URL` (default `https://api.kb.notscam.space`) · `PUBLIC_BASE_URL` (default `https://ink.notscam.space`, ใช้ทำ absolute tile/edit url)
-- `POSTBACK_TTL_HOURS` (default `720` = 30d; te-kb clamp [1,2160])
-- paste content = md text + baked tiles (`![](abs-url)`) + ลิงก์ `?job=` แก้ต่อ · guard content ≤1MB · ทุก publish = paste ใหม่ (immutable) เก็บ `pastes[]` ใน job (Nothing-is-Deleted)
+**Post-back to te-kb (ADR-0006)** — ปุ่ม **Save KB** = save job (bake tiles) + ลง te-kb. **server-side** ล้วน; token อยู่ env เท่านั้น ไม่โผล่ frontend.
+- **เคสเปิดจาก `?src` (มี source paste)** → **append ref เข้า paste เดิม**: บล็อก `✏️ Markup (<วันสร้าง ink, +07>): [ดู](/j/id) · [แก้ไข](/?job=id)` ผ่าน `POST /paste/:slug/append`. **1 ref ต่อ job** (Save ซ้ำ = skip append, /j/id โชว์ tiles ล่าสุดอยู่แล้ว) — flip เป็น history ได้ด้วย `POSTBACK_APPEND_MODE=always`
+- **เคสไม่มี source (upload รูป / `?doc` local) หรือ source หมดอายุ (append 404)** → **fallback สร้าง paste ใหม่** (md+tiles+edit link)
+- Env: `TEKB_PASTE_TOKEN` (paste-only; ไม่ตั้ง → skip เงียบ, job ยังเซฟ) · `TEKB_BASE_URL` (`api.kb.notscam.space`) · `PUBLIC_BASE_URL` (`ink.notscam.space`) · `POSTBACK_TTL_HOURS` (720, clamp [1,2160]) · `POSTBACK_APPEND_MODE` (`once`|`always`)
+- records ใน job: `appendedTo` (1-ref) + `appends[]` / `pastes[]` history (Nothing-is-Deleted) · publish ล้ม → job local ยังอยู่
 
 ## Run — Docker
 
@@ -74,7 +74,7 @@ cd web && bun install && bun run dev                            # :5173 (proxy /
 ## เครื่องมือ (Standard pen toolset)
 
 ปากกา · สี ดำ/แดง/น้ำเงิน · ไฮไลต์ · ยางลบ (stroke-level) · ปรับหนา · undo/redo · ล้าง ·
-✋ นิ้ว วาด/เลื่อน · ⊕ พอดีจอ · ⬇️ PNG · 📤 KB (save + ลง te-kb) · 💾 Save Job.
+✋ นิ้ว วาด/เลื่อน · ⊕ พอดีจอ · ⬇️ PNG · 💾 Save KB (save job + ลง te-kb).
 Pan/zoom = 2 นิ้ว (ใช้ได้ขณะปากกาวาด) · desktop ⌘/Ctrl+scroll = zoom · ⌘/Ctrl+S = save.
 
 ## Acceptance v2 (mapping)
