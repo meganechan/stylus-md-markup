@@ -132,6 +132,7 @@ interface AppendRef {
   slug: string; // source paste slug we appended a ref into
   url: string; // source paste url
   appendedAt: string;
+  expiresAt?: string; // te-kb extends TTL on append
 }
 interface JobManifest {
   id: string;
@@ -510,13 +511,20 @@ app.post("/api/jobs/:id/publish", async (c) => {
   if (res.status === 404) return createNewPaste(c, m, dir, id);
   if (!res.ok) return c.json({ published: false, error: `te-kb append responded ${res.status}` }, 502);
 
-  const pasteUrl = `${TEKB_BASE_URL}/p/${sourceSlug}`;
-  const ref: AppendRef = { slug: sourceSlug, url: pasteUrl, appendedAt: new Date().toISOString() };
+  // 200 { slug, url, expires_at, images } — prefer te-kb's own url (contract)
+  const data = (await res.json().catch(() => ({}))) as { url?: string; expires_at?: string };
+  const pasteUrl = data.url ?? `${TEKB_BASE_URL}/p/${sourceSlug}`;
+  const ref: AppendRef = {
+    slug: sourceSlug,
+    url: pasteUrl,
+    appendedAt: new Date().toISOString(),
+    expiresAt: data.expires_at,
+  };
   m.appendedTo = ref;
   m.appends = [...(m.appends ?? []), ref]; // history (Nothing-is-Deleted)
   await writeFile(join(dir, "job.json"), JSON.stringify(m, null, 2), "utf8");
-  console.log(`appended job ${id} ref -> paste ${sourceSlug}`);
-  return c.json({ published: true, mode: "append", url: pasteUrl, slug: sourceSlug });
+  console.log(`appended job ${id} ref -> ${pasteUrl} (slug ${sourceSlug})`);
+  return c.json({ published: true, mode: "append", url: pasteUrl, slug: sourceSlug, expiresAt: data.expires_at });
 });
 
 // GET /j/:id — minimal human-facing "result" page (tiles + md link) to paste/host.
