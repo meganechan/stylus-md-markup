@@ -40,6 +40,7 @@ Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
 | GET | `/api/jobs/:id/strokes` | vector Ink Overlay (เปิดแก้ต่อ) |
 | GET | `/api/jobs/:id/backdrop` | Source Image (image job) |
 | GET | `/api/jobs/:id/tiles/:n` | baked Tile png |
+| POST | `/api/jobs/:id/publish` | post-back: สร้าง paste ใน te-kb (md+tiles+edit link) คืน url (ADR-0006) |
 | GET | `/j/:id` | หน้า result สรุป (tiles + ลิงก์ md) ให้คนเปิด/แปะ |
 
 **Output reps (ADR-0003)**: (i) vector strokes = ความจริง · (ii) baked tiles ≤1500px (long-edge) · (iii) md text เก็บ server.
@@ -47,6 +48,12 @@ Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
 **Storage**: Job อยู่ใน `JOBS_DIR/<id>/` (`job.json`,`strokes.json`,`md.txt`,`backdrop.png`,`tiles/`). อัปเดต job = id เดิม (link นิ่ง) + archive strokes เดิมไว้ `strokes.history/` (Nothing-is-Deleted). Backdrop source ไม่ถูก mutate.
 
 **Env**: `DOCS_DIR` (md backdrop, :ro) · `JOBS_DIR` (job store, default `./jobs-data`) · `PORT` (8080) · `MAX_UPLOAD` (10MB).
+
+**Post-back to te-kb (ADR-0006)** — Save → publish ผลเป็น paste ใน te-kb (โชว์ markup ใน KB). เป็น **server-side** ล้วน; token อยู่ env เท่านั้น ไม่โผล่ frontend.
+- `TEKB_PASTE_TOKEN` — paste-only token (ไม่ตั้ง → publish ถูก skip เงียบ, job local ยังเซฟปกติ)
+- `TEKB_BASE_URL` (default `https://api.kb.notscam.space`) · `PUBLIC_BASE_URL` (default `https://ink.notscam.space`, ใช้ทำ absolute tile/edit url)
+- `POSTBACK_TTL_HOURS` (default `720` = 30d; te-kb clamp [1,2160])
+- paste content = md text + baked tiles (`![](abs-url)`) + ลิงก์ `?job=` แก้ต่อ · guard content ≤1MB · ทุก publish = paste ใหม่ (immutable) เก็บ `pastes[]` ใน job (Nothing-is-Deleted)
 
 ## Run — Docker
 
@@ -67,7 +74,7 @@ cd web && bun install && bun run dev                            # :5173 (proxy /
 ## เครื่องมือ (Standard pen toolset)
 
 ปากกา · สี ดำ/แดง/น้ำเงิน · ไฮไลต์ · ยางลบ (stroke-level) · ปรับหนา · undo/redo · ล้าง ·
-✋ นิ้ว วาด/เลื่อน · ⊕ พอดีจอ · ⬇️ PNG · 💾 Save Job.
+✋ นิ้ว วาด/เลื่อน · ⊕ พอดีจอ · ⬇️ PNG · 📤 KB (save + ลง te-kb) · 💾 Save Job.
 Pan/zoom = 2 นิ้ว (ใช้ได้ขณะปากกาวาด) · desktop ⌘/Ctrl+scroll = zoom · ⌘/Ctrl+S = save.
 
 ## Acceptance v2 (mapping)

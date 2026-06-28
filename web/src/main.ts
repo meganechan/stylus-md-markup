@@ -2,7 +2,7 @@ import "github-markdown-css/github-markdown-light.css";
 import "highlight.js/styles/github.css";
 import "./style.css";
 
-import { loadDoc, fetchExternalMd, loadJob, loadJobStrokes, loadJobMd, saveJob } from "./api";
+import { loadDoc, fetchExternalMd, loadJob, loadJobStrokes, loadJobMd, saveJob, publishJob } from "./api";
 import type { JobManifest } from "./api";
 import { renderMarkdown } from "./markdown";
 import { AnnotationEngine } from "./annotation";
@@ -91,6 +91,11 @@ async function openJob(id: string) {
   }
   const ink = await loadJobStrokes(id);
   await afterBackdropLoaded(ink.strokes ?? []);
+  // surface a prior te-kb publish (helps decide whether to re-publish)
+  if (job.lastPaste) {
+    resultText.innerHTML = `📚 job นี้เคยลง KB แล้ว: <a href="${job.lastPaste.url}" target="_blank">${job.lastPaste.url}</a>`;
+    resultBanner.hidden = false;
+  }
 }
 
 async function afterBackdropLoaded(strokes: Parameters<typeof engine.loadStrokes>[0]) {
@@ -125,7 +130,7 @@ function watchImages() {
 // ---------------------------------------------------------------------------
 // Save → create/update Markup Job
 // ---------------------------------------------------------------------------
-async function doSave() {
+async function doSave(skipBanner = false) {
   if (!backdropType) return;
   const btn = $<HTMLButtonElement>("#btn-save");
   const prev = btn.textContent;
@@ -149,7 +154,7 @@ async function doSave() {
     currentJobId = manifest.id;
     history.replaceState(null, "", `/?job=${manifest.id}`);
     dirty = false;
-    showResult(manifest, tiles.length);
+    if (!skipBanner) showResult(manifest, tiles.length);
   } catch (err) {
     alert("บันทึกล้มเหลว: " + (err as Error).message);
   } finally {
@@ -159,11 +164,43 @@ async function doSave() {
 }
 
 function showResult(m: JobManifest, tileCount: number) {
-  resultText.innerHTML =
+  let html =
     `✅ บันทึกแล้ว job <b>${m.id}</b> · ${tileCount} tiles · ` +
     `<a href="${m.resultUrl}" target="_blank">เปิดหน้าผล</a> · ` +
     `<a href="/api/jobs/${m.id}" target="_blank">manifest</a>`;
+  if (m.lastPaste) html += ` · 📚 <a href="${m.lastPaste.url}" target="_blank">KB</a>`;
+  resultText.innerHTML = html;
   resultBanner.hidden = false;
+}
+
+// Post-back to te-kb. Factored so it works as a manual button OR (later) auto on
+// Save. Requires a saved job — saves first if needed. Token lives server-side; a
+// server with no token returns reason:"no-token" and we say so without erroring.
+async function publishCurrent() {
+  if (!backdropType) return;
+  const btn = $<HTMLButtonElement>("#btn-publish");
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "กำลังลง KB…";
+  try {
+    if (!currentJobId) await doSave(/*skipBanner*/ true);
+    if (!currentJobId) return;
+    const res = await publishJob(currentJobId);
+    if (res.published && res.url) {
+      resultText.innerHTML = `✅ บันทึกเข้า KB: <a href="${res.url}" target="_blank">${res.url}</a>`;
+    } else if (res.reason === "no-token") {
+      resultText.innerHTML = `ℹ️ เซิร์ฟเวอร์นี้ยังไม่ได้ตั้งค่า post-back (job บันทึก local แล้ว)`;
+    } else {
+      resultText.innerHTML = `⚠️ บันทึก KB ไม่สำเร็จ: ${res.error ?? "unknown"} (job local ยังอยู่)`;
+    }
+    resultBanner.hidden = false;
+  } catch (err) {
+    resultText.innerHTML = `⚠️ บันทึก KB ไม่สำเร็จ: ${(err as Error).message}`;
+    resultBanner.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -358,8 +395,9 @@ function buildToolbar() {
   right.className = "tgroup right";
   right.append(
     button("⬇️ PNG", "ดาวน์โหลด PNG", doDownloadPng, "btn-png"),
+    button("📤 KB", "บันทึก + ลง te-kb (สร้าง paste)", () => void publishCurrent(), "btn-publish"),
     (() => {
-      const b = button("💾 Save Job", "บันทึกเป็น Markup Job", doSave, "btn-save");
+      const b = button("💾 Save Job", "บันทึกเป็น Markup Job", () => void doSave(), "btn-save");
       b.classList.add("primary");
       return b;
     })(),
@@ -400,7 +438,7 @@ function syncToolbarState() {
     finger.textContent = fingerMode === "draw" ? "✋วาด" : "✋เลื่อน";
   }
   const hasBackdrop = !!backdropType;
-  for (const id of ["btn-save", "btn-png"]) {
+  for (const id of ["btn-save", "btn-png", "btn-publish"]) {
     const b = $<HTMLButtonElement>("#" + id);
     if (b) b.disabled = !hasBackdrop;
   }
