@@ -46,14 +46,17 @@ export interface JobManifest {
   resultUrl: string;
   pastes: PasteRef[];
   lastPaste: PasteRef | null;
+  appendedTo: { slug: string; url: string; appendedAt: string } | null;
 }
 
 // Post-back: publish a saved job to te-kb as a paste (server-side). The token
 // is server-only; this just triggers it. Returns the te-kb url or a skip/error.
 export interface PublishResult {
   published: boolean;
+  mode?: "append" | "new"; // appended to source paste, or created a new paste
   url?: string;
   slug?: string;
+  skipped?: boolean; // append skipped (this job already appended to the source)
   reason?: string; // e.g. "no-token"
   error?: string;
 }

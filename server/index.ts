@@ -17,6 +17,7 @@
 //   tiles/tile-1.png..  baked Markup Image slices (≤ tile long-edge)
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { serveStatic } from "hono/bun";
 import { resolve, join, relative, sep, dirname } from "node:path";
 import { readFile, writeFile, stat, mkdir, readdir, unlink } from "node:fs/promises";
@@ -40,6 +41,10 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "https://ink.notscam.spa
 const POSTBACK_TTL_HOURS = Number(process.env.POSTBACK_TTL_HOURS ?? 720);
 // te-kb paste content cap (contract): 1MB. We guard before sending.
 const PASTE_CONTENT_CAP = 1024 * 1024;
+// Save KB appends a ref into the source paste. "once" = one ref per job (skip
+// re-append on repeat saves — the ref links to /j/id which already shows latest
+// tiles). "always" = append every save (visible edit history). Tunable via env.
+const POSTBACK_APPEND_MODE = process.env.POSTBACK_APPEND_MODE === "always" ? "always" : "once";
 
 const app = new Hono();
 
@@ -123,6 +128,12 @@ interface PasteRef {
   publishedAt: string;
   expiresAt?: string;
 }
+interface AppendRef {
+  slug: string; // source paste slug we appended a ref into
+  url: string; // source paste url
+  appendedAt: string;
+  expiresAt?: string; // te-kb extends TTL on append
+}
 interface JobManifest {
   id: string;
   type: "md" | "image";
@@ -130,10 +141,12 @@ interface JobManifest {
   updatedAt: string;
   tileCount: number;
   hasMd: boolean;
-  backdropRef?: string; // md: original ?doc= path (to resolve local images on reopen)
+  backdropRef?: string; // md: original ?doc= path or ?src= url (resolve images / source slug)
   pageWidth?: number;
   pageHeight?: number;
-  pastes?: PasteRef[]; // every te-kb publish, appended (Nothing-is-Deleted; ADR-0006)
+  pastes?: PasteRef[]; // new pastes created (fallback path) — appended (Nothing-is-Deleted)
+  appendedTo?: AppendRef; // the source paste this job's ref was appended into (1-ref-per-job)
+  appends?: AppendRef[]; // full append history (Nothing-is-Deleted)
 }
 
 function manifestToApi(m: JobManifest) {
@@ -151,6 +164,7 @@ function manifestToApi(m: JobManifest) {
     resultUrl: `/j/${m.id}`,
     pastes: m.pastes ?? [],
     lastPaste: m.pastes && m.pastes.length ? m.pastes[m.pastes.length - 1] : null,
+    appendedTo: m.appendedTo ?? null, // source paste this job's ref lives in (if any)
   };
 }
 
@@ -374,20 +388,52 @@ function buildPasteMarkdown(m: JobManifest, mdText: string | null, strokeCount: 
   return `# ${markHeader}\n\n${tilesMd}\n\n${editLink}\n`;
 }
 
-// POST /api/jobs/:id/publish — post the result back to te-kb as a new paste
-// (server-side; the write token never reaches the browser). ADR-0006.
-//   - no token configured  -> { published:false, reason:"no-token" } (200, not an error)
-//   - te-kb non-2xx/failure -> { published:false, error } (502); the local job is intact
-app.post("/api/jobs/:id/publish", async (c) => {
-  const id = c.req.param("id");
-  const m = await loadManifest(id);
-  if (!m) return c.json({ error: "not found" }, 404);
-  const dir = jobDir(id)!;
+// Authenticated POST to te-kb (Bearer token + 10s timeout).
+function tekbPost(url: string, body: unknown): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  return fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TEKB_PASTE_TOKEN}` },
+    body: JSON.stringify(body),
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(timer));
+}
 
-  if (!TEKB_PASTE_TOKEN) {
-    return c.json({ published: false, reason: "no-token" });
+// Extract the source paste slug from a job's backdropRef, iff it is a te-kb
+// paste URL (https://api.kb.notscam.space/p/<slug>). Query (?raw=1) is ignored.
+function extractTekbSlug(ref?: string): string | null {
+  if (!ref) return null;
+  try {
+    const u = new URL(ref);
+    if (u.hostname !== "api.kb.notscam.space") return null;
+    const m = u.pathname.match(/^\/p\/([A-Za-z0-9]{8,32})$/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
   }
+}
 
+// Format a UTC ISO timestamp as Asia/Bangkok (UTC+7) "YYYY-MM-DD HH:mm".
+function fmtBangkok(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("sv-SE", { timeZone: "Asia/Bangkok" }).slice(0, 16);
+  } catch {
+    return iso.slice(0, 16).replace("T", " ");
+  }
+}
+
+// The ref block appended into the source paste: dated link to view (/j/id, tiles)
+// and edit (/?job=id, strokes).
+function buildRefBlock(m: JobManifest): string {
+  const view = `${PUBLIC_BASE_URL}/j/${m.id}`;
+  const edit = `${PUBLIC_BASE_URL}/?job=${m.id}`;
+  return `\n\n---\n✏️ Markup (${fmtBangkok(m.createdAt)}): [ดู](${view}) · [แก้ไข](${edit})`;
+}
+
+// Fallback path (no source paste, or source expired): create a NEW te-kb paste
+// with the full markup content. Returns the Hono response.
+async function createNewPaste(c: Context, m: JobManifest, dir: string, id: string) {
   const strokeCount = await countStrokes(dir);
   let mdText: string | null = null;
   if (m.hasMd) {
@@ -398,46 +444,24 @@ app.post("/api/jobs/:id/publish", async (c) => {
     }
   }
   const content = buildPasteMarkdown(m, mdText, strokeCount);
-  // Guard the te-kb content cap (1MB) before sending. Our paste is md text + a
-  // few https tile refs (not base64), so this is a safety net, not expected.
   if (Buffer.byteLength(content, "utf8") > PASTE_CONTENT_CAP) {
     return c.json({ published: false, error: "content exceeds te-kb 1MB cap" }, 413);
   }
   const title = ((mdText && firstHeading(mdText)) || `Stylus Markup ${id}`).slice(0, 200);
-  const body = { content, title, ttl_hours: POSTBACK_TTL_HOURS };
-
   let res: Response;
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
-    res = await fetch(`${TEKB_BASE_URL}/paste`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${TEKB_PASTE_TOKEN}`,
-      },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
+    res = await tekbPost(`${TEKB_BASE_URL}/paste`, { content, title, ttl_hours: POSTBACK_TTL_HOURS });
   } catch (e) {
     return c.json({ published: false, error: "te-kb unreachable: " + (e as Error).message }, 502);
   }
-  if (!res.ok) {
-    return c.json({ published: false, error: `te-kb responded ${res.status}` }, 502);
-  }
+  if (!res.ok) return c.json({ published: false, error: `te-kb responded ${res.status}` }, 502);
   const data = (await res.json().catch(() => ({}))) as {
     slug?: string;
     url?: string;
     expires_at?: string;
-    images?: unknown;
   };
   const url = data.url ?? (data.slug ? `${TEKB_BASE_URL}/p/${data.slug}` : null);
-  if (!url) {
-    return c.json({ published: false, error: "te-kb response missing url/slug" }, 502);
-  }
-
-  // record the paste (append — Nothing-is-Deleted)
+  if (!url) return c.json({ published: false, error: "te-kb response missing url/slug" }, 502);
   const ref: PasteRef = {
     slug: data.slug ?? "",
     url,
@@ -446,9 +470,61 @@ app.post("/api/jobs/:id/publish", async (c) => {
   };
   m.pastes = [...(m.pastes ?? []), ref];
   await writeFile(join(dir, "job.json"), JSON.stringify(m, null, 2), "utf8");
-  console.log(`published job ${id} -> ${url} (ttl ${POSTBACK_TTL_HOURS}h, images=${JSON.stringify(data.images)})`);
+  console.log(`published(new) job ${id} -> ${url}`);
+  return c.json({ published: true, mode: "new", url, slug: ref.slug, expiresAt: data.expires_at });
+}
 
-  return c.json({ published: true, url, slug: ref.slug, expiresAt: data.expires_at });
+// POST /api/jobs/:id/publish — Save KB post-back (ADR-0006). Append a dated ref
+// into the SOURCE paste (slug from ?src) so the markup shows under the original;
+// fall back to creating a new paste when there is no source (image/local) or the
+// source paste has expired. Server-side only — the token never reaches the browser.
+//   - no token            -> { published:false, reason:"no-token" } (200)
+//   - te-kb failure        -> { published:false, error } (502); the local job is intact
+app.post("/api/jobs/:id/publish", async (c) => {
+  const id = c.req.param("id");
+  const m = await loadManifest(id);
+  if (!m) return c.json({ error: "not found" }, 404);
+  const dir = jobDir(id)!;
+
+  if (!TEKB_PASTE_TOKEN) return c.json({ published: false, reason: "no-token" });
+
+  const sourceSlug = extractTekbSlug(m.backdropRef);
+
+  // No source paste (image upload / local ?doc) → create a new paste.
+  if (!sourceSlug) return createNewPaste(c, m, dir, id);
+
+  // 1-ref-per-job: if this job already appended to this source, skip — the ref
+  // points to /j/id which already serves the latest tiles. (Flip via env to
+  // "always" for visible edit history.)
+  if (POSTBACK_APPEND_MODE === "once" && m.appendedTo?.slug === sourceSlug) {
+    return c.json({ published: true, mode: "append", url: m.appendedTo.url, slug: sourceSlug, skipped: true });
+  }
+
+  const refBlock = buildRefBlock(m);
+  let res: Response;
+  try {
+    res = await tekbPost(`${TEKB_BASE_URL}/paste/${sourceSlug}/append`, { content: refBlock });
+  } catch (e) {
+    return c.json({ published: false, error: "te-kb unreachable: " + (e as Error).message }, 502);
+  }
+  // source paste gone/expired → fall back to a fresh paste (append-only API 404s)
+  if (res.status === 404) return createNewPaste(c, m, dir, id);
+  if (!res.ok) return c.json({ published: false, error: `te-kb append responded ${res.status}` }, 502);
+
+  // 200 { slug, url, expires_at, images } — prefer te-kb's own url (contract)
+  const data = (await res.json().catch(() => ({}))) as { url?: string; expires_at?: string };
+  const pasteUrl = data.url ?? `${TEKB_BASE_URL}/p/${sourceSlug}`;
+  const ref: AppendRef = {
+    slug: sourceSlug,
+    url: pasteUrl,
+    appendedAt: new Date().toISOString(),
+    expiresAt: data.expires_at,
+  };
+  m.appendedTo = ref;
+  m.appends = [...(m.appends ?? []), ref]; // history (Nothing-is-Deleted)
+  await writeFile(join(dir, "job.json"), JSON.stringify(m, null, 2), "utf8");
+  console.log(`appended job ${id} ref -> ${pasteUrl} (slug ${sourceSlug})`);
+  return c.json({ published: true, mode: "append", url: pasteUrl, slug: sourceSlug, expiresAt: data.expires_at });
 });
 
 // GET /j/:id — minimal human-facing "result" page (tiles + md link) to paste/host.
@@ -490,7 +566,7 @@ console.log(`  JOBS_DIR = ${JOBS_DIR} (markup jobs)`);
 console.log(`  WEB_DIR  = ${WEB_DIR}`);
 console.log(
   `  post-back = ${TEKB_PASTE_TOKEN ? "ON" : "OFF (no TEKB_PASTE_TOKEN — publish skipped)"}` +
-    ` → ${TEKB_BASE_URL}/paste · public ${PUBLIC_BASE_URL}`,
+    ` → ${TEKB_BASE_URL} · public ${PUBLIC_BASE_URL} · append=${POSTBACK_APPEND_MODE} · ttl=${POSTBACK_TTL_HOURS}h`,
 );
 
 export default {
