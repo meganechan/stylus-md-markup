@@ -265,23 +265,28 @@ app.post("/api/jobs", async (c) => {
   }
 
   const now = new Date().toISOString();
-  let createdAt = now;
+  let prev: JobManifest | null = null;
   try {
-    const prev = JSON.parse(await readFile(join(dir, "job.json"), "utf8")) as JobManifest;
-    createdAt = prev.createdAt ?? now;
+    prev = JSON.parse(await readFile(join(dir, "job.json"), "utf8")) as JobManifest;
   } catch {
     /* new job */
   }
   const manifest: JobManifest = {
     id,
     type,
-    createdAt,
+    createdAt: prev?.createdAt ?? now,
     updatedAt: now,
     tileCount: n,
     hasMd,
     backdropRef: meta.backdropRef,
     pageWidth: meta.pageWidth,
     pageHeight: meta.pageHeight,
+    // Carry post-back tracking across re-saves — a strokes-save must NOT wipe the
+    // publish state, or the 1-ref-per-job skip breaks (re-append) and history is
+    // lost (Nothing-is-Deleted). These are only mutated by /publish.
+    appendedTo: prev?.appendedTo,
+    pastes: prev?.pastes,
+    appends: prev?.appends,
   };
   await writeFile(join(dir, "job.json"), JSON.stringify(manifest, null, 2), "utf8");
 
