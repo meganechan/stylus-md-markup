@@ -29,6 +29,18 @@ const WEB_DIR = resolve(process.env.WEB_DIR ?? "./web/dist");
 const PORT = Number(process.env.PORT ?? 8080);
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD ?? 10 * 1024 * 1024); // 10MB
 
+// Post-back to te-kb (ADR-0006). The write token lives ONLY here (server env),
+// never in the frontend. If unset, publishing is skipped silently.
+const TEKB_PASTE_TOKEN = process.env.TEKB_PASTE_TOKEN ?? "";
+const TEKB_BASE_URL = (process.env.TEKB_BASE_URL ?? "https://api.kb.notscam.space").replace(/\/$/, "");
+// Public origin of THIS service, used to build absolute tile/edit URLs in the paste.
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "https://ink.notscam.space").replace(/\/$/, "");
+// TTL for published pastes (te-kb contract: explicit, clamped [1,2160]). Markup is
+// a review artifact we want to keep ~30d. Tunable via env without rebuild.
+const POSTBACK_TTL_HOURS = Number(process.env.POSTBACK_TTL_HOURS ?? 720);
+// te-kb paste content cap (contract): 1MB. We guard before sending.
+const PASTE_CONTENT_CAP = 1024 * 1024;
+
 const app = new Hono();
 
 // --- path safety -----------------------------------------------------------
@@ -105,6 +117,12 @@ app.get("/static/*", async (c) => {
 // Markup Jobs
 // ---------------------------------------------------------------------------
 
+interface PasteRef {
+  slug: string;
+  url: string;
+  publishedAt: string;
+  expiresAt?: string;
+}
 interface JobManifest {
   id: string;
   type: "md" | "image";
@@ -115,6 +133,7 @@ interface JobManifest {
   backdropRef?: string; // md: original ?doc= path (to resolve local images on reopen)
   pageWidth?: number;
   pageHeight?: number;
+  pastes?: PasteRef[]; // every te-kb publish, appended (Nothing-is-Deleted; ADR-0006)
 }
 
 function manifestToApi(m: JobManifest) {
@@ -130,6 +149,8 @@ function manifestToApi(m: JobManifest) {
     tiles: Array.from({ length: m.tileCount }, (_, i) => `${base}/tiles/${i + 1}`),
     strokesUrl: `${base}/strokes`,
     resultUrl: `/j/${m.id}`,
+    pastes: m.pastes ?? [],
+    lastPaste: m.pastes && m.pastes.length ? m.pastes[m.pastes.length - 1] : null,
   };
 }
 
@@ -324,6 +345,112 @@ app.get("/api/jobs/:id/tiles/:n", async (c) => {
   return new Response(Bun.file(file));
 });
 
+// Count strokes in a job's overlay (for the "N marks" label in the paste).
+async function countStrokes(dir: string): Promise<number> {
+  try {
+    const s = JSON.parse(await readFile(join(dir, "strokes.json"), "utf8"));
+    return Array.isArray(s.strokes) ? s.strokes.length : 0;
+  } catch {
+    return 0;
+  }
+}
+function firstHeading(md: string): string | null {
+  const m = md.match(/^#{1,6}\s+(.+)$/m);
+  return m ? m[1].trim().slice(0, 120) : null;
+}
+
+// Build the markdown body of the te-kb paste from a job (md text + Tiles + edit link).
+function buildPasteMarkdown(m: JobManifest, mdText: string | null, strokeCount: number): string {
+  const tileUrls = Array.from(
+    { length: m.tileCount },
+    (_, i) => `${PUBLIC_BASE_URL}/api/jobs/${m.id}/tiles/${i + 1}`,
+  );
+  const tilesMd = tileUrls.map((u) => `![](${u})`).join("\n\n");
+  const editLink = `[ดู/แก้ต่อใน Stylus](${PUBLIC_BASE_URL}/?job=${m.id})`;
+  const markHeader = `✍️ Markup (${strokeCount} รอยมาร์ก)`;
+  if (m.hasMd && mdText !== null) {
+    return `${mdText}\n\n---\n\n${markHeader}\n\n${tilesMd}\n\n${editLink}\n`;
+  }
+  return `# ${markHeader}\n\n${tilesMd}\n\n${editLink}\n`;
+}
+
+// POST /api/jobs/:id/publish — post the result back to te-kb as a new paste
+// (server-side; the write token never reaches the browser). ADR-0006.
+//   - no token configured  -> { published:false, reason:"no-token" } (200, not an error)
+//   - te-kb non-2xx/failure -> { published:false, error } (502); the local job is intact
+app.post("/api/jobs/:id/publish", async (c) => {
+  const id = c.req.param("id");
+  const m = await loadManifest(id);
+  if (!m) return c.json({ error: "not found" }, 404);
+  const dir = jobDir(id)!;
+
+  if (!TEKB_PASTE_TOKEN) {
+    return c.json({ published: false, reason: "no-token" });
+  }
+
+  const strokeCount = await countStrokes(dir);
+  let mdText: string | null = null;
+  if (m.hasMd) {
+    try {
+      mdText = await readFile(join(dir, "md.txt"), "utf8");
+    } catch {
+      mdText = null;
+    }
+  }
+  const content = buildPasteMarkdown(m, mdText, strokeCount);
+  // Guard the te-kb content cap (1MB) before sending. Our paste is md text + a
+  // few https tile refs (not base64), so this is a safety net, not expected.
+  if (Buffer.byteLength(content, "utf8") > PASTE_CONTENT_CAP) {
+    return c.json({ published: false, error: "content exceeds te-kb 1MB cap" }, 413);
+  }
+  const title = ((mdText && firstHeading(mdText)) || `Stylus Markup ${id}`).slice(0, 200);
+  const body = { content, title, ttl_hours: POSTBACK_TTL_HOURS };
+
+  let res: Response;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    res = await fetch(`${TEKB_BASE_URL}/paste`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${TEKB_PASTE_TOKEN}`,
+      },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+  } catch (e) {
+    return c.json({ published: false, error: "te-kb unreachable: " + (e as Error).message }, 502);
+  }
+  if (!res.ok) {
+    return c.json({ published: false, error: `te-kb responded ${res.status}` }, 502);
+  }
+  const data = (await res.json().catch(() => ({}))) as {
+    slug?: string;
+    url?: string;
+    expires_at?: string;
+    images?: unknown;
+  };
+  const url = data.url ?? (data.slug ? `${TEKB_BASE_URL}/p/${data.slug}` : null);
+  if (!url) {
+    return c.json({ published: false, error: "te-kb response missing url/slug" }, 502);
+  }
+
+  // record the paste (append — Nothing-is-Deleted)
+  const ref: PasteRef = {
+    slug: data.slug ?? "",
+    url,
+    publishedAt: new Date().toISOString(),
+    expiresAt: data.expires_at,
+  };
+  m.pastes = [...(m.pastes ?? []), ref];
+  await writeFile(join(dir, "job.json"), JSON.stringify(m, null, 2), "utf8");
+  console.log(`published job ${id} -> ${url} (ttl ${POSTBACK_TTL_HOURS}h, images=${JSON.stringify(data.images)})`);
+
+  return c.json({ published: true, url, slug: ref.slug, expiresAt: data.expires_at });
+});
+
 // GET /j/:id — minimal human-facing "result" page (tiles + md link) to paste/host.
 app.get("/j/:id", async (c) => {
   const m = await loadManifest(c.req.param("id"));
@@ -361,6 +488,10 @@ console.log(`stylus-markup-service serving on http://0.0.0.0:${PORT}`);
 console.log(`  DOCS_DIR = ${DOCS_DIR} (read-only backdrop source)`);
 console.log(`  JOBS_DIR = ${JOBS_DIR} (markup jobs)`);
 console.log(`  WEB_DIR  = ${WEB_DIR}`);
+console.log(
+  `  post-back = ${TEKB_PASTE_TOKEN ? "ON" : "OFF (no TEKB_PASTE_TOKEN — publish skipped)"}` +
+    ` → ${TEKB_BASE_URL}/paste · public ${PUBLIC_BASE_URL}`,
+);
 
 export default {
   port: PORT,

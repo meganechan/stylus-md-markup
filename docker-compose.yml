@@ -10,6 +10,12 @@ services:
       - PORT=8080
       - DOCS_DIR=/docs
       - JOBS_DIR=/jobs
+      # post-back to te-kb (ADR-0006). TEKB_PASTE_TOKEN is a secret injected at
+      # runtime (coolify) — never commit it. Without it, publish is skipped.
+      - TEKB_PASTE_TOKEN=${TEKB_PASTE_TOKEN:-}
+      - TEKB_BASE_URL=${TEKB_BASE_URL:-https://api.kb.notscam.space}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://ink.notscam.space}
+      - POSTBACK_TTL_HOURS=${POSTBACK_TTL_HOURS:-720}
     volumes:
       # markdown Backdrop source -> /docs, mounted READ-ONLY (ADR-0002):
       # the tool physically cannot modify the author's source files.

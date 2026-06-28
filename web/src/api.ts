@@ -27,6 +27,12 @@ export interface DocPayload {
   text: string;
 }
 
+export interface PasteRef {
+  slug: string;
+  url: string;
+  publishedAt: string;
+  expiresAt?: string;
+}
 export interface JobManifest {
   id: string;
   type: "md" | "image";
@@ -38,6 +44,23 @@ export interface JobManifest {
   tiles: string[];
   strokesUrl: string;
   resultUrl: string;
+  pastes: PasteRef[];
+  lastPaste: PasteRef | null;
+}
+
+// Post-back: publish a saved job to te-kb as a paste (server-side). The token
+// is server-only; this just triggers it. Returns the te-kb url or a skip/error.
+export interface PublishResult {
+  published: boolean;
+  url?: string;
+  slug?: string;
+  reason?: string; // e.g. "no-token"
+  error?: string;
+}
+export async function publishJob(id: string): Promise<PublishResult> {
+  const r = await fetch(`/api/jobs/${encodeURIComponent(id)}/publish`, { method: "POST" });
+  const data = await r.json().catch(() => ({ published: false, error: r.statusText }));
+  return data as PublishResult;
 }
 
 // Raw markdown for a Backdrop opened via ?doc=<path> (read-only DOCS_DIR).
