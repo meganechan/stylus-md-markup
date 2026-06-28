@@ -1,7 +1,8 @@
 # Stylus MD Markup
 
 > รีวิวเอกสาร markdown ด้วยลายมือ — render `.md` สวย → เขียนปากกาทับ → export เป็นรูป (PNG) ส่งกลับ.
-> **ต้นฉบับ `.md` ไม่ถูกแก้** (read-only). ไม่มี OCR, ไม่เขียนกลับเข้า md. (ดู `CONTEXT`/ADR ใน pm1-oracle)
+> **ต้นฉบับ `.md` ไม่ถูกแก้** — docs mount แบบ `:ro`, strokes เก็บแยกใน `INK_DIR` (ADR-0002).
+> ไม่มี OCR, ไม่เขียนกลับเข้า md. (ดู `CONTEXT`/ADR ใน pm1-oracle)
 
 POC ตาม spec `stylus-md-markup-spec.md v0.1`.
 
@@ -11,7 +12,7 @@ POC ตาม spec `stylus-md-markup-spec.md v0.1`.
 .md (mount, read-only) → render Preview (markdown-it, หน้ากว้างคงที่ 800px)
    → เขียน/ไฮไลต์/ลบ ทับ (Annotation canvas overlay, Pointer Events, ไม่พึ่ง pressure)
    → flatten ฝั่ง client (html2canvas) → Markup Image (PNG) → download/share
-strokes autosave เป็น sidecar  <file>.md.ink.json  ข้างไฟล์ (เปิดใหม่/ re-export ได้)
+strokes autosave เป็น sidecar ใน INK_DIR/<doc path>.ink.json (แยกจาก docs, เปิดใหม่/ re-export ได้)
 ```
 
 ## Stack
@@ -26,9 +27,11 @@ strokes autosave เป็น sidecar  <file>.md.ink.json  ข้างไฟล
 |--------|------|---------|
 | GET | `/api/files` | list `.md` ใน mount (recursive) |
 | GET | `/api/doc?path=` | raw markdown ของ Document |
-| GET | `/api/ink?path=` | โหลด Sidecar strokes |
-| PUT | `/api/ink?path=` | บันทึก Sidecar (`<file>.md.ink.json`) |
+| GET | `/api/ink?path=` | โหลด Sidecar strokes (จาก `INK_DIR`) |
+| PUT | `/api/ink?path=` | บันทึก Sidecar → `INK_DIR/<path>.ink.json` (ไม่แตะ docs) |
 | GET | `/static/*` | serve ไฟล์ใน mount (รูป local ใน md) |
+
+**Env**: `DOCS_DIR` (read-only docs mount) · `INK_DIR` (writable sidecar store, default `./ink-data`) · `PORT` (default 8080)
 
 ## Run — Docker (วิธีหลักของ POC)
 
@@ -46,7 +49,10 @@ DOCS_HOST=/path/to/your/docs docker compose up --build
 
 ```bash
 docker build -t stylus-md-markup .
-docker run --rm -p 8080:8080 -v /path/to/docs:/docs stylus-md-markup
+docker run --rm -p 8080:8080 \
+  -v /path/to/docs:/docs:ro \
+  -v "$PWD/ink-data:/ink" \
+  stylus-md-markup
 ```
 
 ## Run — Dev (hot reload)
@@ -80,7 +86,7 @@ cd web && bun install && bun run dev            # :5173 (proxy /api,/static -> :
 | 4 | pan/zoom นิ้ว ขณะปากกาวาด | `viewport.ts` · pointer routing ใน `main.ts` |
 | 5 | Export PNG รวม preview + รอยเขียน | `exporter.ts` |
 | 6 | เปิดใหม่ strokes กลับมา | sidecar `/api/ink` · autosave |
-| 7 | ต้นฉบับ `.md` ไม่ถูกแตะ | server เขียนเฉพาะ `*.md.ink.json` |
+| 7 | ต้นฉบับ `.md` ไม่ถูกแตะ | docs mount `:ro` · server เขียนเฉพาะใน `INK_DIR` (ADR-0002) |
 
 ## Out of scope (POC)
 

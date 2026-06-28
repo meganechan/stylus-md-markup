@@ -19,6 +19,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 ENV DOCS_DIR=/docs
+ENV INK_DIR=/ink
 ENV WEB_DIR=/app/web/dist
 
 COPY --from=build /app/node_modules ./node_modules
@@ -26,8 +27,8 @@ COPY --from=build /app/web/dist ./web/dist
 COPY server ./server
 COPY package.json .
 
-# Documents are bind-mounted here at run time (read-only source).
-VOLUME ["/docs"]
+# /docs = read-only Document source (bind-mount :ro). /ink = writable sidecar store.
+VOLUME ["/docs", "/ink"]
 EXPOSE 8080
 
 CMD ["bun", "run", "server/index.ts"]

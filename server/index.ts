@@ -15,6 +15,10 @@ import { resolve, join, relative, sep, dirname } from "node:path";
 import { readdir, readFile, writeFile, stat, mkdir } from "node:fs/promises";
 
 const DOCS_DIR = resolve(process.env.DOCS_DIR ?? "./docs-sample");
+// Annotation Sidecars live in their OWN writable store, mirroring the Document's
+// relative path — never inside DOCS_DIR. This lets the Document mount be :ro so
+// the tool physically cannot touch the author's source files (ADR-0002).
+const INK_DIR = resolve(process.env.INK_DIR ?? "./ink-data");
 const WEB_DIR = resolve(process.env.WEB_DIR ?? "./web/dist");
 const PORT = Number(process.env.PORT ?? 8080);
 
@@ -23,11 +27,21 @@ const app = new Hono();
 // --- path safety -----------------------------------------------------------
 // Every client-supplied path is resolved inside DOCS_DIR and rejected if it
 // escapes the mount (path traversal guard).
-function safeDocPath(rel: string): string | null {
+function safeJoin(base: string, rel: string): string | null {
   if (!rel) return null;
-  const abs = resolve(DOCS_DIR, rel);
-  const within = abs === DOCS_DIR || abs.startsWith(DOCS_DIR + sep);
+  const abs = resolve(base, rel);
+  const within = abs === base || abs.startsWith(base + sep);
   return within ? abs : null;
+}
+
+function safeDocPath(rel: string): string | null {
+  return safeJoin(DOCS_DIR, rel);
+}
+
+// Map a Document relative path to its Sidecar path inside INK_DIR (mirrored tree).
+function safeInkPath(rel: string): string | null {
+  if (!rel.toLowerCase().endsWith(".md")) return null;
+  return safeJoin(INK_DIR, rel + ".ink.json");
 }
 
 // --- recursively collect .md files ----------------------------------------
@@ -75,11 +89,11 @@ app.get("/api/doc", async (c) => {
 });
 
 // GET /api/ink?path=... — the Sidecar for a Document (strokes), or empty.
+// Read from INK_DIR (mirrored path), never from the read-only DOCS_DIR.
 app.get("/api/ink", async (c) => {
   const rel = c.req.query("path") ?? "";
-  const abs = safeDocPath(rel);
-  if (!abs) return c.json({ error: "bad path" }, 400);
-  const sidecar = abs + ".ink.json";
+  const sidecar = safeInkPath(rel);
+  if (!sidecar) return c.json({ error: "bad path" }, 400);
   try {
     const text = await readFile(sidecar, "utf8");
     return c.json(JSON.parse(text));
@@ -88,21 +102,17 @@ app.get("/api/ink", async (c) => {
   }
 });
 
-// PUT /api/ink?path=... — save the Sidecar. Writes <doc>.md.ink.json, never the .md.
+// PUT /api/ink?path=... — save the Sidecar into INK_DIR. Never touches DOCS_DIR.
 app.put("/api/ink", async (c) => {
   const rel = c.req.query("path") ?? "";
-  const abs = safeDocPath(rel);
-  if (!abs) return c.json({ error: "bad path" }, 400);
-  if (!abs.toLowerCase().endsWith(".md")) {
-    return c.json({ error: "ink path must target a .md document" }, 400);
-  }
+  const sidecar = safeInkPath(rel);
+  if (!sidecar) return c.json({ error: "bad path (must target a .md document)" }, 400);
   let body: unknown;
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: "bad json" }, 400);
   }
-  const sidecar = abs + ".ink.json";
   await mkdir(dirname(sidecar), { recursive: true });
   await writeFile(sidecar, JSON.stringify(body), "utf8");
   return c.json({ ok: true });
@@ -127,8 +137,12 @@ app.use("/assets/*", serveStatic({ root: relative(process.cwd(), WEB_DIR) || "."
 app.get("/", serveStatic({ path: join(relative(process.cwd(), WEB_DIR) || ".", "index.html") }));
 app.get("*", serveStatic({ path: join(relative(process.cwd(), WEB_DIR) || ".", "index.html") }));
 
+// Ensure the writable Sidecar store exists (DOCS_DIR stays read-only).
+await mkdir(INK_DIR, { recursive: true }).catch(() => {});
+
 console.log(`stylus-md-markup serving on http://0.0.0.0:${PORT}`);
-console.log(`  DOCS_DIR = ${DOCS_DIR}`);
+console.log(`  DOCS_DIR = ${DOCS_DIR} (read-only source)`);
+console.log(`  INK_DIR  = ${INK_DIR} (annotation sidecars)`);
 console.log(`  WEB_DIR  = ${WEB_DIR}`);
 
 export default {

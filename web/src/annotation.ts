@@ -24,7 +24,7 @@ export class AnnotationEngine {
 
   tool: Tool = "pen";
   color = "#e11d48"; // review red by default
-  penWidth = 3;
+  penWidth = 2; // fine default for small handwritten corrections; user can thicken
   highlighterWidth = 18;
   eraserRadius = 14;
 

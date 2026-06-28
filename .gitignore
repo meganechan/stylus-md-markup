@@ -3,5 +3,6 @@ web/node_modules/
 web/dist/
 *.log
 .DS_Store
-# annotation sidecars produced at runtime
+# annotation sidecar store (runtime, separate from docs — ADR-0002)
+ink-data/
 *.md.ink.json
