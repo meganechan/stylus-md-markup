@@ -1,0 +1,14 @@
+# POC convenience: build + run, bind-mounting your Documents directory.
+# Override DOCS_HOST to point at the folder of .md files you want to review.
+services:
+  stylus-md-markup:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DOCS_DIR=/docs
+    volumes:
+      # host folder of .md documents -> /docs in the container.
+      # default: the bundled sample docs.
+      - ${DOCS_HOST:-./docs-sample}:/docs

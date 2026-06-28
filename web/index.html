@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Stylus MD Markup</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <header class="sidebar-head">
+          <h1>🖊️ Stylus MD</h1>
+          <button id="reload-files" title="Reload list" class="icon-btn">⟳</button>
+        </header>
+        <ul id="file-list"></ul>
+        <footer class="sidebar-foot" id="docs-dir"></footer>
+      </aside>
+
+      <main id="main">
+        <div id="toolbar"></div>
+        <div id="stage">
+          <div id="viewport">
+            <div id="page">
+              <article id="preview" class="markdown-body"></article>
+              <canvas id="ink"></canvas>
+            </div>
+          </div>
+          <div id="empty-hint">เลือกไฟล์ .md จากแถบซ้ายเพื่อเริ่มรีวิว</div>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

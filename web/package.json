@@ -1,0 +1,21 @@
+{
+  "name": "stylus-md-markup-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "github-markdown-css": "^5.8.1",
+    "highlight.js": "^11.10.0",
+    "html2canvas": "^1.4.1",
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

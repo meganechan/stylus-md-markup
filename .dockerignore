@@ -1,0 +1,7 @@
+node_modules
+web/node_modules
+web/dist
+.git
+*.log
+.DS_Store
+docs-sample/**/*.md.ink.json

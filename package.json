@@ -1,0 +1,17 @@
+{
+  "name": "stylus-md-markup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Review markdown by hand: render .md → annotate with a stylus → export a flattened Markup Image. Source .md is never modified.",
+  "type": "module",
+  "scripts": {
+    "dev:server": "DOCS_DIR=./docs-sample bun run --watch server/index.ts",
+    "dev:web": "cd web && bun run dev",
+    "dev": "bun run dev:server & bun run dev:web",
+    "build:web": "cd web && bun install && bun run build",
+    "start": "bun run server/index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  }
+}
