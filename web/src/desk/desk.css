@@ -1,0 +1,245 @@
+/* Review Desk — surface-specific styles (engine/page/toolbar come from style.css) */
+
+body.desk {
+  margin: 0;
+  background: var(--bg, #f3f4f6);
+}
+
+/* login gate */
+#login {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg, #f3f4f6);
+  z-index: 50;
+}
+.login-card {
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+  padding: 28px 32px;
+  width: 320px;
+  text-align: center;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+}
+.login-card h1 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+.login-card p {
+  color: #6b7280;
+  margin: 6px 0 14px;
+  font-size: 13px;
+}
+.login-card input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+.login-card button {
+  width: 100%;
+  padding: 10px;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  cursor: pointer;
+}
+.login-error {
+  color: #b91c1c;
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+/* layout */
+#desk {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+#desk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  flex: 0 0 auto;
+}
+#desk-title {
+  font-weight: 700;
+  font-size: 16px;
+  color: #111827;
+  text-decoration: none;
+}
+.conn {
+  color: #d1d5db;
+  font-size: 12px;
+}
+.conn.live {
+  color: #16a34a;
+}
+
+/* inbox */
+#inbox {
+  padding: 16px;
+  overflow-y: auto;
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+#inbox h2 {
+  font-size: 15px;
+  color: #374151;
+}
+#inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.inbox-item a {
+  display: block;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  text-decoration: none;
+  color: inherit;
+}
+.inbox-item a:hover {
+  border-color: var(--accent, #2563eb);
+}
+.it-title {
+  display: block;
+  font-weight: 600;
+  color: #111827;
+}
+.it-sub {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+.muted {
+  color: #9ca3af;
+  font-size: 14px;
+}
+
+/* review view */
+#review {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+#review-meta {
+  padding: 12px 16px;
+  background: #fff;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  flex: 0 0 auto;
+}
+#review-meta .back {
+  font-size: 12px;
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+#review-meta h2 {
+  margin: 6px 0 4px;
+  font-size: 17px;
+}
+.r-sub {
+  font-size: 12px;
+  color: #6b7280;
+}
+.r-context {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #eff6ff;
+  border-left: 3px solid var(--accent, #2563eb);
+  border-radius: 4px;
+  font-size: 14px;
+  color: #1e3a8a;
+  white-space: pre-wrap;
+}
+#r-history {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #6b7280;
+}
+.unsupported {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  color: #9ca3af;
+  background: var(--bg, #f3f4f6);
+}
+
+/* decision bar */
+#review-actions {
+  flex: 0 0 auto;
+  background: #fff;
+  border-top: 1px solid var(--border, #e5e7eb);
+  padding: 10px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+#comment {
+  flex: 1;
+  resize: none;
+  height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+}
+.decisions {
+  display: flex;
+  gap: 8px;
+}
+.decide {
+  border: none;
+  border-radius: 8px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+.decide.approve {
+  background: #16a34a;
+}
+.decide.return {
+  background: #d97706;
+}
+.decide.reject {
+  background: #dc2626;
+}
+.decide:disabled {
+  opacity: 0.5;
+}
+
+#desk-toolbar {
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #fff;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}

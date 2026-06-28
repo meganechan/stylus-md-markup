@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Review Desk</title>
+  </head>
+  <body class="desk">
+    <!-- passphrase gate -->
+    <div id="login" hidden>
+      <form class="login-card" id="login-form">
+        <h1>🗂️ Review Desk</h1>
+        <p>ใส่ passphrase เพื่อเข้าโต๊ะรีวิว</p>
+        <input type="password" id="passphrase" placeholder="passphrase" autocomplete="current-password" />
+        <button type="submit">เข้า</button>
+        <p class="login-error" id="login-error" hidden></p>
+      </form>
+    </div>
+
+    <main id="desk" hidden>
+      <header id="desk-head">
+        <a href="/review" id="desk-title">🗂️ Review Desk</a>
+        <span id="conn" class="conn" title="realtime connection">●</span>
+      </header>
+
+      <!-- inbox -->
+      <section id="inbox">
+        <h2>รอรีวิว (<span id="inbox-count">0</span>)</h2>
+        <ul id="inbox-list"></ul>
+        <p id="inbox-empty" class="muted">ยังไม่มีงานรอรีวิว</p>
+      </section>
+
+      <!-- one review -->
+      <section id="review" hidden>
+        <div id="review-meta">
+          <a href="/review" class="back">← inbox</a>
+          <h2 id="r-title"></h2>
+          <div class="r-sub">
+            <span id="r-asker"></span> · รอบ <span id="r-round"></span> ·
+            <span id="r-deadline"></span>
+          </div>
+          <div id="r-context" class="r-context"></div>
+          <details id="r-history" hidden>
+            <summary>ประวัติรอบก่อนหน้า</summary>
+            <ol id="r-history-list"></ol>
+          </details>
+        </div>
+
+        <div id="desk-toolbar"></div>
+
+        <div id="stage">
+          <div id="viewport">
+            <div id="page">
+              <article id="preview" class="markdown-body"></article>
+              <canvas id="ink"></canvas>
+            </div>
+          </div>
+          <div id="r-unsupported" class="unsupported" hidden></div>
+        </div>
+
+        <div id="review-actions">
+          <textarea id="comment" placeholder="ความเห็น (พิมพ์ได้ หรือเขียนปากกาทับเอกสารด้านบน)"></textarea>
+          <div class="decisions">
+            <button class="decide approve" data-outcome="approve">✅ Approve</button>
+            <button class="decide return" data-outcome="return">↩️ Return</button>
+            <button class="decide reject" data-outcome="reject">⛔ Reject</button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/desk/main.ts"></script>
+  </body>
+</html>
