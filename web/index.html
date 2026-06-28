@@ -6,19 +6,10 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
-    <title>Stylus MD Markup</title>
+    <title>Stylus Markup</title>
   </head>
   <body>
     <div id="app">
-      <aside id="sidebar">
-        <header class="sidebar-head">
-          <h1>🖊️ Stylus MD</h1>
-          <button id="reload-files" title="Reload list" class="icon-btn">⟳</button>
-        </header>
-        <ul id="file-list"></ul>
-        <footer class="sidebar-foot" id="docs-dir"></footer>
-      </aside>
-
       <main id="main">
         <div id="toolbar"></div>
         <div id="stage">
@@ -28,7 +19,30 @@
               <canvas id="ink"></canvas>
             </div>
           </div>
-          <div id="empty-hint">เลือกไฟล์ .md จากแถบซ้ายเพื่อเริ่มรีวิว</div>
+
+          <!-- Intake: shown when no Backdrop is loaded -->
+          <div id="intake">
+            <div class="intake-card">
+              <h1>🖊️ Stylus Markup</h1>
+              <p>เปิด Backdrop เพื่อเริ่มวาดรีวิว</p>
+              <label class="intake-btn">
+                📷 อัปโหลดรูป (Source Image)
+                <input type="file" id="image-input" accept="image/*" hidden />
+              </label>
+              <p class="intake-error" id="intake-error" hidden></p>
+              <p class="intake-hint">
+                หรือเปิด markdown ด้วย <code>?doc=&lt;path&gt;</code> ·
+                จาก te-kb <code>?src=&lt;raw-md-url&gt;</code> ·
+                เปิด job เดิมด้วย <code>?job=&lt;id&gt;</code>
+              </p>
+            </div>
+          </div>
+
+          <!-- Save result banner -->
+          <div id="result-banner" hidden>
+            <span id="result-text"></span>
+            <button id="result-close" class="icon-btn">✕</button>
+          </div>
         </div>
       </main>
     </div>

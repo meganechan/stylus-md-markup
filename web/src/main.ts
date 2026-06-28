@@ -2,78 +2,98 @@ import "github-markdown-css/github-markdown-light.css";
 import "highlight.js/styles/github.css";
 import "./style.css";
 
-import { listFiles, loadDoc, loadInk, saveInk } from "./api";
-import type { InkDoc } from "./api";
+import { loadDoc, fetchExternalMd, loadJob, loadJobStrokes, loadJobMd, saveJob } from "./api";
+import type { JobManifest } from "./api";
 import { renderMarkdown } from "./markdown";
 import { AnnotationEngine } from "./annotation";
 import { Viewport } from "./viewport";
-import { exportMarkupImage, shareOrDownload } from "./exporter";
+import { bakeTiles, exportMarkupImage, downloadBlob } from "./exporter";
 
 // --- elements --------------------------------------------------------------
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
-const fileListEl = $<HTMLUListElement>("#file-list");
-const docsDirEl = $<HTMLElement>("#docs-dir");
 const previewEl = $<HTMLElement>("#preview");
 const inkCanvas = $<HTMLCanvasElement>("#ink");
 const pageEl = $<HTMLElement>("#page");
 const viewportEl = $<HTMLElement>("#viewport");
 const toolbarEl = $<HTMLElement>("#toolbar");
-const emptyHint = $<HTMLElement>("#empty-hint");
+const intakeEl = $<HTMLElement>("#intake");
+const imageInput = $<HTMLInputElement>("#image-input");
+const resultBanner = $<HTMLElement>("#result-banner");
+const resultText = $<HTMLElement>("#result-text");
 
 const engine = new AnnotationEngine(inkCanvas);
 const viewport = new Viewport(viewportEl, pageEl);
 
-let currentPath: string | null = null;
-let fingerMode: "draw" | "scroll" = "draw";
-let saveTimer: number | undefined;
+// --- editor state ----------------------------------------------------------
+let backdropType: "md" | "image" | null = null;
+let currentJobId: string | null = null; // set once saved / reopened
+let currentMdText: string | null = null; // md backdrop source text
+let currentBackdropRef: string | null = null; // md original ?doc= path
+let currentBackdropBlob: Blob | null = null; // image backdrop bytes (for first save)
+let dirty = false;
 
-// --- file list -------------------------------------------------------------
-async function refreshFiles() {
-  const { docsDir, files } = await listFiles();
-  docsDirEl.textContent = docsDir;
-  fileListEl.innerHTML = "";
-  if (!files.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = "ไม่พบไฟล์ .md ใน mount";
-    fileListEl.appendChild(li);
-    return;
-  }
-  for (const f of files) {
-    const li = document.createElement("li");
-    li.textContent = f;
-    li.dataset.path = f;
-    if (f === currentPath) li.classList.add("active");
-    li.addEventListener("click", () => openDoc(f));
-    fileListEl.appendChild(li);
-  }
-}
-
-// --- open a document -------------------------------------------------------
-async function openDoc(path: string) {
-  // flush any pending save for the previous doc first
-  await flushSave();
-  currentPath = path;
-  emptyHint.style.display = "none";
-
+// ---------------------------------------------------------------------------
+// Backdrop loading
+// ---------------------------------------------------------------------------
+async function openMdDoc(path: string) {
   const doc = await loadDoc(path);
+  backdropType = "md";
+  currentMdText = doc.text;
+  currentBackdropRef = path;
+  currentJobId = null;
   previewEl.innerHTML = renderMarkdown(doc.text, doc.dir);
-
-  // size the page once layout settles, then load strokes
-  await sizePage();
-  const ink = await loadInk(path);
-  engine.loadStrokes(ink.strokes ?? []);
-
-  // fit page into the viewport width
-  viewport.reset(pageEl.offsetWidth, viewportEl.clientWidth);
-
-  for (const li of fileListEl.querySelectorAll("li")) {
-    li.classList.toggle("active", (li as HTMLElement).dataset.path === path);
-  }
-  watchImages();
+  await afterBackdropLoaded([]);
 }
 
-// Measure the preview and resize the ink canvas to match (logical page space).
+// External markdown Backdrop (te-kb edit button → ?src=<raw-md-url>).
+async function openMdFromUrl(url: string) {
+  const text = await fetchExternalMd(url);
+  backdropType = "md";
+  currentMdText = text;
+  currentBackdropRef = url; // provenance; external md uses absolute image URLs
+  currentJobId = null;
+  previewEl.innerHTML = renderMarkdown(text, "");
+  await afterBackdropLoaded([]);
+}
+
+async function openImageFile(file: File) {
+  backdropType = "image";
+  currentBackdropBlob = file;
+  currentJobId = null;
+  currentMdText = null;
+  const url = URL.createObjectURL(file);
+  previewEl.innerHTML = `<img id="backdrop-img" src="${url}" alt="backdrop" />`;
+  await afterBackdropLoaded([]);
+}
+
+async function openJob(id: string) {
+  const job: JobManifest = await loadJob(id);
+  currentJobId = id;
+  backdropType = job.type;
+  currentBackdropRef = job.backdropRef;
+  if (job.type === "md") {
+    currentMdText = await loadJobMd(id);
+    const dir = job.backdropRef ? job.backdropRef.split("/").slice(0, -1).join("/") : "";
+    previewEl.innerHTML = renderMarkdown(currentMdText, dir);
+  } else {
+    currentMdText = null;
+    previewEl.innerHTML = `<img id="backdrop-img" src="${job.backdropUrl}" alt="backdrop" />`;
+  }
+  const ink = await loadJobStrokes(id);
+  await afterBackdropLoaded(ink.strokes ?? []);
+}
+
+async function afterBackdropLoaded(strokes: Parameters<typeof engine.loadStrokes>[0]) {
+  intakeEl.style.display = "none";
+  await sizePage();
+  engine.loadStrokes(strokes);
+  viewport.reset(pageEl.offsetWidth, viewportEl.clientWidth);
+  watchImages();
+  dirty = false;
+  syncToolbarState();
+}
+
+// Size the page to the rendered Backdrop, and the ink canvas to match.
 async function sizePage() {
   await new Promise((r) => requestAnimationFrame(() => r(null)));
   const w = previewEl.offsetWidth;
@@ -82,10 +102,9 @@ async function sizePage() {
   engine.setPageSize(w, h);
 }
 
-// Images can change page height after they load — re-measure when they do.
+// Images (md-local or the Source Image) change height once loaded — re-measure.
 function watchImages() {
-  const imgs = previewEl.querySelectorAll("img");
-  imgs.forEach((img) => {
+  previewEl.querySelectorAll("img").forEach((img) => {
     if (!img.complete) {
       img.addEventListener("load", () => void sizePage(), { once: true });
       img.addEventListener("error", () => void sizePage(), { once: true });
@@ -93,113 +112,116 @@ function watchImages() {
   });
 }
 
-// --- autosave (sidecar) ----------------------------------------------------
-function scheduleSave() {
-  if (!currentPath) return;
-  window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => void flushSave(), 700);
+// ---------------------------------------------------------------------------
+// Save → create/update Markup Job
+// ---------------------------------------------------------------------------
+async function doSave() {
+  if (!backdropType) return;
+  const btn = $<HTMLButtonElement>("#btn-save");
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "กำลังบันทึก…";
+  try {
+    const tiles = await bakeTiles(previewEl, inkCanvas, viewport);
+    const { width, height } = engine.pageSize();
+    const manifest = await saveJob({
+      type: backdropType,
+      jobId: currentJobId ?? undefined,
+      mdText: backdropType === "md" ? currentMdText ?? "" : undefined,
+      backdropRef: currentBackdropRef ?? undefined,
+      pageWidth: width,
+      pageHeight: height,
+      strokes: { version: 1, strokes: engine.getStrokes(), pageWidth: width, pageHeight: height },
+      // backdrop bytes only needed when first creating an image job
+      backdrop: backdropType === "image" && !currentJobId ? currentBackdropBlob ?? undefined : undefined,
+      tiles,
+    });
+    currentJobId = manifest.id;
+    history.replaceState(null, "", `/?job=${manifest.id}`);
+    dirty = false;
+    showResult(manifest, tiles.length);
+  } catch (err) {
+    alert("บันทึกล้มเหลว: " + (err as Error).message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
 }
 
-async function flushSave() {
-  window.clearTimeout(saveTimer);
-  if (!currentPath) return;
-  const { width, height } = engine.pageSize();
-  const ink: InkDoc = {
-    version: 1,
-    strokes: engine.getStrokes(),
-    pageWidth: width,
-    pageHeight: height,
-  };
-  await saveInk(currentPath, ink);
+function showResult(m: JobManifest, tileCount: number) {
+  resultText.innerHTML =
+    `✅ บันทึกแล้ว job <b>${m.id}</b> · ${tileCount} tiles · ` +
+    `<a href="${m.resultUrl}" target="_blank">เปิดหน้าผล</a> · ` +
+    `<a href="/api/jobs/${m.id}" target="_blank">manifest</a>`;
+  resultBanner.hidden = false;
 }
 
-engine.onChange = () => {
-  scheduleSave();
-  syncToolbarState();
-};
-
-// --- pointer routing -------------------------------------------------------
-// Pen/mouse always draws. Touch: 2 fingers = pinch/pan; 1 finger draws
-// (fingerMode 'draw') or pans (fingerMode 'scroll'). A pen can draw while two
-// fingers navigate, because routing is by pointerType, not a global mode.
+// ---------------------------------------------------------------------------
+// Pointer routing — pen draws, 2 fingers pinch/pan, single-finger draw|scroll.
+// (Identical model to the POC; routing by pointerType, no pressure.)
+// ---------------------------------------------------------------------------
+let fingerMode: "draw" | "scroll" = "draw";
 interface Pt { x: number; y: number; type: string }
 const pointers = new Map<number, Pt>();
 let drawPointerId: number | null = null;
 let panPointerId: number | null = null;
 let panLast = { x: 0, y: 0 };
-
 interface Gesture { ids: [number, number]; startDist: number; startScale: number; content0: { x: number; y: number } }
 let gesture: Gesture | null = null;
 
 function touchIds(): number[] {
   return [...pointers.entries()].filter(([, p]) => p.type === "touch").map(([id]) => id);
 }
-
 function startDraw(id: number, clientX: number, clientY: number) {
   drawPointerId = id;
   const c = viewport.toContent(clientX, clientY);
   engine.begin(c.x, c.y);
 }
-
 function startGesture(a: number, b: number) {
-  // abandon an in-progress single-finger draw when a pinch begins
   if (drawPointerId !== null && pointers.get(drawPointerId)?.type === "touch") {
     engine.cancelActive();
     drawPointerId = null;
   }
   const pa = pointers.get(a)!;
   const pb = pointers.get(b)!;
-  const midClientX = (pa.x + pb.x) / 2;
-  const midClientY = (pa.y + pb.y) / 2;
   gesture = {
     ids: [a, b],
     startDist: Math.hypot(pa.x - pb.x, pa.y - pb.y),
     startScale: viewport.scale,
-    content0: viewport.toContent(midClientX, midClientY),
+    content0: viewport.toContent((pa.x + pb.x) / 2, (pa.y + pb.y) / 2),
   };
 }
-
 function updateGesture() {
   if (!gesture) return;
   const pa = pointers.get(gesture.ids[0]);
   const pb = pointers.get(gesture.ids[1]);
   if (!pa || !pb) return;
   const dist = Math.hypot(pa.x - pb.x, pa.y - pb.y);
-  const midClientX = (pa.x + pb.x) / 2;
-  const midClientY = (pa.y + pb.y) / 2;
   const nextScale = gesture.startScale * (dist / gesture.startDist);
-  viewport.pinch(gesture.content0, viewport.viewportPoint(midClientX, midClientY), nextScale);
+  viewport.pinch(gesture.content0, viewport.viewportPoint((pa.x + pb.x) / 2, (pa.y + pb.y) / 2), nextScale);
 }
 
 viewportEl.addEventListener("pointerdown", (e) => {
-  if (!currentPath) return;
-  // Stop the browser from starting a native text selection on the Preview DOM
-  // underneath the overlay while drawing/panning. This is a markup tool, not a
-  // text copier — selection is disabled outright (see also user-select in CSS).
+  if (!backdropType) return;
   e.preventDefault();
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
-  // Capture so we keep receiving move/up even if the finger leaves the element.
-  // Guard: can throw NotFoundError (e.g. synthetic events) — must never abort routing.
   try {
     viewportEl.setPointerCapture(e.pointerId);
   } catch {
-    /* capture is best-effort */
+    /* best-effort */
   }
-
   if (e.pointerType === "touch") {
     const tIds = touchIds();
     if (tIds.length >= 2 && !gesture) {
       startGesture(tIds[0], tIds[1]);
     } else if (tIds.length === 1) {
-      if (fingerMode === "draw") {
-        startDraw(e.pointerId, e.clientX, e.clientY);
-      } else {
+      if (fingerMode === "draw") startDraw(e.pointerId, e.clientX, e.clientY);
+      else {
         panPointerId = e.pointerId;
         panLast = { x: e.clientX, y: e.clientY };
       }
     }
   } else {
-    // pen / mouse
     startDraw(e.pointerId, e.clientX, e.clientY);
   }
 });
@@ -207,10 +229,9 @@ viewportEl.addEventListener("pointerdown", (e) => {
 viewportEl.addEventListener("pointermove", (e) => {
   const p = pointers.get(e.pointerId);
   if (!p) return;
-  e.preventDefault(); // suppress native selection/scroll while a pointer is active
+  e.preventDefault();
   p.x = e.clientX;
   p.y = e.clientY;
-
   if (gesture && (e.pointerId === gesture.ids[0] || e.pointerId === gesture.ids[1])) {
     updateGesture();
   } else if (e.pointerId === drawPointerId) {
@@ -224,9 +245,7 @@ viewportEl.addEventListener("pointermove", (e) => {
 
 function endPointer(e: PointerEvent) {
   try {
-    if (viewportEl.hasPointerCapture(e.pointerId)) {
-      viewportEl.releasePointerCapture(e.pointerId);
-    }
+    if (viewportEl.hasPointerCapture(e.pointerId)) viewportEl.releasePointerCapture(e.pointerId);
   } catch {
     /* best-effort */
   }
@@ -234,22 +253,17 @@ function endPointer(e: PointerEvent) {
     engine.end();
     drawPointerId = null;
   }
-  if (gesture && (e.pointerId === gesture.ids[0] || e.pointerId === gesture.ids[1])) {
-    gesture = null;
-  }
-  if (e.pointerId === panPointerId) {
-    panPointerId = null;
-  }
+  if (gesture && (e.pointerId === gesture.ids[0] || e.pointerId === gesture.ids[1])) gesture = null;
+  if (e.pointerId === panPointerId) panPointerId = null;
   pointers.delete(e.pointerId);
 }
 viewportEl.addEventListener("pointerup", endPointer);
 viewportEl.addEventListener("pointercancel", endPointer);
 
-// desktop trackpad / wheel zoom (ctrl/⌘+wheel) and scroll-pan
 viewportEl.addEventListener(
   "wheel",
   (e) => {
-    if (!currentPath) return;
+    if (!backdropType) return;
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       viewport.zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.1 : 1 / 1.1);
@@ -260,7 +274,9 @@ viewportEl.addEventListener(
   { passive: false },
 );
 
-// --- toolbar ---------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
 const COLORS = [
   { name: "ดำ", value: "#111827" },
   { name: "แดง", value: "#e11d48" },
@@ -282,10 +298,11 @@ function buildToolbar() {
 
   const tools = document.createElement("div");
   tools.className = "tgroup";
-  const penBtn = button("✏️", "ปากกา", () => setTool("pen"), "tool-pen");
-  const hiBtn = button("🖍️", "ไฮไลต์", () => setTool("highlighter"), "tool-hi");
-  const erBtn = button("🩹", "ยางลบ", () => setTool("eraser"), "tool-eraser");
-  tools.append(penBtn, hiBtn, erBtn);
+  tools.append(
+    button("✏️", "ปากกา", () => setTool("pen"), "tool-pen"),
+    button("🖍️", "ไฮไลต์", () => setTool("highlighter"), "tool-hi"),
+    button("🩹", "ยางลบ", () => setTool("eraser"), "tool-eraser"),
+  );
 
   const colors = document.createElement("div");
   colors.className = "tgroup";
@@ -307,10 +324,7 @@ function buildToolbar() {
   widthInput.max = "16";
   widthInput.value = String(engine.penWidth);
   widthInput.title = "ความหนา";
-  widthInput.id = "width-range";
-  widthInput.addEventListener("input", () => {
-    engine.penWidth = Number(widthInput.value);
-  });
+  widthInput.addEventListener("input", () => (engine.penWidth = Number(widthInput.value)));
   widthGroup.append("หนา", widthInput);
 
   const edit = document.createElement("div");
@@ -332,9 +346,14 @@ function buildToolbar() {
 
   const right = document.createElement("div");
   right.className = "tgroup right";
-  const exportBtn = button("⬇️ Export PNG", "บันทึกเป็นรูป", doExport, "btn-export");
-  exportBtn.classList.add("primary");
-  right.append(exportBtn);
+  right.append(
+    button("⬇️ PNG", "ดาวน์โหลด PNG", doDownloadPng, "btn-png"),
+    (() => {
+      const b = button("💾 Save Job", "บันทึกเป็น Markup Job", doSave, "btn-save");
+      b.classList.add("primary");
+      return b;
+    })(),
+  );
 
   toolbarEl.append(tools, colors, widthGroup, edit, nav, right);
   syncToolbarState();
@@ -370,31 +389,27 @@ function syncToolbarState() {
     finger.classList.toggle("active", fingerMode === "scroll");
     finger.textContent = fingerMode === "draw" ? "✋วาด" : "✋เลื่อน";
   }
-}
-
-// --- export ----------------------------------------------------------------
-async function doExport() {
-  if (!currentPath) return;
-  const btn = $<HTMLButtonElement>("#btn-export");
-  const prev = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "กำลังสร้าง…";
-  try {
-    await flushSave();
-    const blob = await exportMarkupImage(previewEl, inkCanvas, viewport);
-    const base = currentPath.split("/").pop()!.replace(/\.md$/i, "");
-    await shareOrDownload(blob, `${base}.markup.png`);
-  } catch (err) {
-    alert("Export ล้มเหลว: " + (err as Error).message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = prev;
+  const hasBackdrop = !!backdropType;
+  for (const id of ["btn-save", "btn-png"]) {
+    const b = $<HTMLButtonElement>("#" + id);
+    if (b) b.disabled = !hasBackdrop;
   }
 }
 
-// keep page sized as preview reflows (late images, fonts)
+async function doDownloadPng() {
+  if (!backdropType) return;
+  const blob = await exportMarkupImage(previewEl, inkCanvas, viewport);
+  downloadBlob(blob, `${currentJobId ?? "markup"}.png`);
+}
+
+engine.onChange = () => {
+  dirty = true;
+  syncToolbarState();
+};
+
+// keep page sized as backdrop reflows
 const ro = new ResizeObserver(() => {
-  if (!currentPath) return;
+  if (!backdropType) return;
   const w = previewEl.offsetWidth;
   const h = previewEl.scrollHeight;
   if (w && h && (w !== engine.pageSize().width || h !== engine.pageSize().height)) {
@@ -404,19 +419,50 @@ const ro = new ResizeObserver(() => {
 });
 ro.observe(previewEl);
 
-window.addEventListener("beforeunload", () => void flushSave());
-
-// keyboard: undo/redo on desktop
 window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
     e.preventDefault();
     if (e.shiftKey) engine.redo();
     else engine.undo();
   }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    void doSave();
+  }
 });
 
-$("#reload-files").addEventListener("click", () => void refreshFiles());
+window.addEventListener("beforeunload", (e) => {
+  if (dirty) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 
-// --- boot ------------------------------------------------------------------
+imageInput.addEventListener("change", () => {
+  const f = imageInput.files?.[0];
+  if (f) void openImageFile(f);
+});
+$("#result-close").addEventListener("click", () => (resultBanner.hidden = true));
+
+// ---------------------------------------------------------------------------
+// Boot — route by URL params
+// ---------------------------------------------------------------------------
 buildToolbar();
-void refreshFiles();
+(async () => {
+  const params = new URLSearchParams(location.search);
+  const job = params.get("job");
+  const doc = params.get("doc");
+  const src = params.get("src");
+  try {
+    if (job) await openJob(job);
+    else if (src) await openMdFromUrl(src);
+    else if (doc) await openMdDoc(doc);
+    else intakeEl.style.display = "";
+  } catch (err) {
+    // Show the error in the intake card (polite, non-blocking) rather than alert().
+    intakeEl.style.display = "";
+    const e = $<HTMLElement>("#intake-error");
+    e.textContent = "⚠️ " + (err as Error).message;
+    e.hidden = false;
+  }
+})();

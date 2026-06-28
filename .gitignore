@@ -3,6 +3,7 @@ web/node_modules/
 web/dist/
 *.log
 .DS_Store
-# annotation sidecar store (runtime, separate from docs — ADR-0002)
+# markup job store (runtime, separate from docs — ADR-0002)
+jobs-data/
 ink-data/
 *.md.ink.json

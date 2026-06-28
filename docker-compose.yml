@@ -9,10 +9,10 @@ services:
     environment:
       - PORT=8080
       - DOCS_DIR=/docs
-      - INK_DIR=/ink
+      - JOBS_DIR=/jobs
     volumes:
-      # host folder of .md documents -> /docs, mounted READ-ONLY (ADR-0002):
+      # markdown Backdrop source -> /docs, mounted READ-ONLY (ADR-0002):
       # the tool physically cannot modify the author's source files.
       - ${DOCS_HOST:-./docs-sample}:/docs:ro
-      # separate writable store for annotation sidecars (mirrors doc paths).
-      - ${INK_HOST:-./ink-data}:/ink
+      # separate writable store for Markup Jobs (strokes + md + tiles).
+      - ${JOBS_HOST:-./jobs-data}:/jobs

@@ -4,5 +4,6 @@ web/dist
 .git
 *.log
 .DS_Store
+jobs-data
 ink-data
 docs-sample/**/*.md.ink.json

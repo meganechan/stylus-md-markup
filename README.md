@@ -1,97 +1,91 @@
-# Stylus MD Markup
+# Stylus Markup Service
 
-> รีวิวเอกสาร markdown ด้วยลายมือ — render `.md` สวย → เขียนปากกาทับ → export เป็นรูป (PNG) ส่งกลับ.
-> **ต้นฉบับ `.md` ไม่ถูกแก้** — docs mount แบบ `:ro`, strokes เก็บแยกใน `INK_DIR` (ADR-0002).
-> ไม่มี OCR, ไม่เขียนกลับเข้า md. (ดู `CONTEXT`/ADR ใน pm1-oracle)
+> วาดรีวิวด้วยลายมือบน **Backdrop** (markdown หรือรูป) → เก็บเป็น **Markup Job** บน server → consumer (คน · Claude · te-kb) มา pull.
+> ต้นฉบับ Backdrop **read-only** · strokes เป็น vector (แก้ต่อได้) · baked tiles ≤1500px ให้ vision อ่านคม · ไม่มี OCR.
+> v2 ของ POC `stylus-md-markup`. ศัพท์/เหตุผล: `CONTEXT.md` + ADR-0001..0005 (pm1-oracle).
 
-POC ตาม spec `stylus-md-markup-spec.md v0.1`.
-
-## Workflow
+## Spine
 
 ```
-.md (mount, read-only) → render Preview (markdown-it, หน้ากว้างคงที่ 800px)
-   → เขียน/ไฮไลต์/ลบ ทับ (Annotation canvas overlay, Pointer Events, ไม่พึ่ง pressure)
-   → flatten ฝั่ง client (html2canvas) → Markup Image (PNG) → download/share
-strokes autosave เป็น sidecar ใน INK_DIR/<doc path>.ink.json (แยกจาก docs, เปิดใหม่/ re-export ได้)
+Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
+  → Stylus editor วาด Ink Overlay (vector strokes, ไม่พึ่ง pressure)
+  → Save = สร้าง Markup Job: { strokes + backdrop + md text? + baked tiles }
+  → consumer pull:  คน/Claude = tiles + md-text link · te-kb = host tiles + ลิงก์ md
 ```
+
+## Editor (no sidebar) — เปิด Backdrop ทีละตัว
+
+| เปิดด้วย | ความหมาย |
+|----------|----------|
+| `?doc=<path>` | markdown จาก mount (DOCS_DIR, read-only) |
+| `?src=<raw-md-url>` | markdown ภายนอกจาก te-kb (ปุ่ม edit) — fetch client-side, host allowlist `api.kb.notscam.space`, ใส่ `?raw=1`, จัดการ 410/404 |
+| `?job=<id>` | เปิด Markup Job เดิม — strokes กลับมาแก้ต่อได้ |
+| ไม่มี param | หน้า intake → อัปโหลดรูปเป็น Source Image |
 
 ## Stack
 
 - **Frontend**: Vite + vanilla TS · `markdown-it` + `highlight.js` + `github-markdown-css` · `html2canvas`
-- **Backend**: Bun + Hono — static serve + 3 endpoint
-- **Container**: single Dockerfile, 1 port, listen `0.0.0.0`, bind-mount `DOCS_DIR`
+- **Backend**: Bun + Hono — job store + static serve, single port `0.0.0.0`
+- **Container**: single Dockerfile, bind-mount `DOCS_DIR` (`:ro`) + `JOBS_DIR`
 
 ## API
 
 | Method | Path | หน้าที่ |
 |--------|------|---------|
-| GET | `/api/files` | list `.md` ใน mount (recursive) |
-| GET | `/api/doc?path=` | raw markdown ของ Document |
-| GET | `/api/ink?path=` | โหลด Sidecar strokes (จาก `INK_DIR`) |
-| PUT | `/api/ink?path=` | บันทึก Sidecar → `INK_DIR/<path>.ink.json` (ไม่แตะ docs) |
-| GET | `/static/*` | serve ไฟล์ใน mount (รูป local ใน md) |
+| GET | `/api/doc?path=` | raw md ของ Backdrop (md จาก mount) |
+| GET | `/static/*` | serve DOCS_DIR (รูป local ใน md) |
+| POST | `/api/jobs` | สร้าง/อัปเดต Markup Job (multipart: `meta`,`strokes`,`backdrop?`,`tile`×n) |
+| GET | `/api/jobs/:id` | manifest: `{type, mdTextUrl, backdropUrl, tiles[], strokesUrl, resultUrl, backdropRef}` |
+| GET | `/api/jobs/:id/md` | raw md text (404 ถ้าเป็น image job) |
+| GET | `/api/jobs/:id/strokes` | vector Ink Overlay (เปิดแก้ต่อ) |
+| GET | `/api/jobs/:id/backdrop` | Source Image (image job) |
+| GET | `/api/jobs/:id/tiles/:n` | baked Tile png |
+| GET | `/j/:id` | หน้า result สรุป (tiles + ลิงก์ md) ให้คนเปิด/แปะ |
 
-**Env**: `DOCS_DIR` (read-only docs mount) · `INK_DIR` (writable sidecar store, default `./ink-data`) · `PORT` (default 8080)
+**Output reps (ADR-0003)**: (i) vector strokes = ความจริง · (ii) baked tiles ≤1500px (long-edge) · (iii) md text เก็บ server.
 
-## Run — Docker (วิธีหลักของ POC)
+**Storage**: Job อยู่ใน `JOBS_DIR/<id>/` (`job.json`,`strokes.json`,`md.txt`,`backdrop.png`,`tiles/`). อัปเดต job = id เดิม (link นิ่ง) + archive strokes เดิมไว้ `strokes.history/` (Nothing-is-Deleted). Backdrop source ไม่ถูก mutate.
+
+**Env**: `DOCS_DIR` (md backdrop, :ro) · `JOBS_DIR` (job store, default `./jobs-data`) · `PORT` (8080) · `MAX_UPLOAD` (10MB).
+
+## Run — Docker
 
 ```bash
-# review เอกสารตัวอย่างที่แถมมา
 docker compose up --build
-
-# หรือชี้ไปโฟลเดอร์ .md ของคุณเอง
-DOCS_HOST=/path/to/your/docs docker compose up --build
+# หรือชี้ docs ของคุณเอง + host port:  DOCS_HOST=/path/to/docs HOST_PORT=8095 docker compose up --build
 ```
-
-เปิด `http://<host-ip>:8080` จาก iPhone / Galaxy Z Fold (เครื่องเดียวกัน LAN).
-
-### Docker (ไม่ใช้ compose)
-
-```bash
-docker build -t stylus-md-markup .
-docker run --rm -p 8080:8080 \
-  -v /path/to/docs:/docs:ro \
-  -v "$PWD/ink-data:/ink" \
-  stylus-md-markup
-```
+เปิด `http://<host-ip>:<port>/` จากมือถือ/แท็บเล็ต.
 
 ## Run — Dev (hot reload)
 
 ```bash
-# 1) backend (Bun) — serve API + sample docs
 bun install
-DOCS_DIR=./docs-sample bun run dev:server      # :8080
-
-# 2) frontend (Vite) — อีก terminal
-cd web && bun install && bun run dev            # :5173 (proxy /api,/static -> :8080)
+DOCS_DIR=./docs-sample JOBS_DIR=./jobs-data bun run dev:server   # :8080
+cd web && bun install && bun run dev                            # :5173 (proxy /api,/static)
 ```
 
-เปิด `http://localhost:5173`.
+## เครื่องมือ (Standard pen toolset)
 
-## เครื่องมือปากกา (Standard toolset)
+ปากกา · สี ดำ/แดง/น้ำเงิน · ไฮไลต์ · ยางลบ (stroke-level) · ปรับหนา · undo/redo · ล้าง ·
+✋ นิ้ว วาด/เลื่อน · ⊕ พอดีจอ · ⬇️ PNG · 💾 Save Job.
+Pan/zoom = 2 นิ้ว (ใช้ได้ขณะปากกาวาด) · desktop ⌘/Ctrl+scroll = zoom · ⌘/Ctrl+S = save.
 
-ปากกา · สี ดำ/แดง/น้ำเงิน · ไฮไลต์ · ยางลบ (stroke-level) · ปรับความหนา · undo/redo · ล้างทั้งหมด ·
-ปุ่ม ✋ สลับ “นิ้ว = วาด / นิ้ว = เลื่อน” · ⊕ พอดีจอ · Export PNG.
+## Acceptance v2 (mapping)
 
-**Pan/zoom**: สองนิ้ว = เลื่อน+ซูม (ใช้ได้แม้ปากกากำลังวาด). บน desktop: ⌘/Ctrl + scroll = ซูม.
-ปากกา (pointerType=pen) วาดเสมอ — แยกจากนิ้วด้วย Pointer Events.
+| # | ข้อ | ที่อยู่ |
+|---|-----|--------|
+| 1 | editor ไม่มี sidebar; backdrop จาก md param + upload รูป | `main.ts` boot · intake |
+| 2 | วาด markup ได้ (เหมือน POC) | `annotation.ts` |
+| 3 | Save → job มี strokes + md text + baked tiles ≤1500px | `exporter.ts bakeTiles` · `POST /api/jobs` |
+| 4 | `GET /api/jobs/:id` คืน tiles + urls ครบ | `server manifestToApi` |
+| 5 | เปิด job เดิม → แก้เส้นต่อได้ | `openJob` · `/strokes` |
+| 6 | ต้นฉบับ backdrop ไม่ mutate | docs :ro · job store แยก |
+| 7 | image UI (ไม่มี md) → tiles อย่างเดียว | image job · `/md` = 404 |
+| + | te-kb edit: `?src` external md (allowlist + 410/404) | `api.ts fetchExternalMd` |
 
-## POC acceptance (mapping)
+## Out of scope (worker1)
 
-| # | ข้อ | ที่อยู่ในโค้ด |
-|---|-----|--------------|
-| 1 | list `.md` จาก mount | `server` `/api/files` · `main.ts refreshFiles` |
-| 2 | render สวย (heading/table/code/รูป) | `markdown.ts` |
-| 3 | เขียนปากกา (≥2 สี, ลบ, undo, ไฮไลต์, ปรับหนา) | `annotation.ts` · toolbar |
-| 4 | pan/zoom นิ้ว ขณะปากกาวาด | `viewport.ts` · pointer routing ใน `main.ts` |
-| 5 | Export PNG รวม preview + รอยเขียน | `exporter.ts` |
-| 6 | เปิดใหม่ strokes กลับมา | sidecar `/api/ink` · autosave |
-| 7 | ต้นฉบับ `.md` ไม่ถูกแตะ | docs mount `:ro` · server เขียนเฉพาะใน `INK_DIR` (ADR-0002) |
-
-## Out of scope (POC)
-
-Embedded Ink เขียนกลับเข้า md · OCR ลายมือ→text · multi-user/auth · pressure/tilt · shape/text/sticky ·
-integrate เข้าระบบ te-kb (เฟสถัดไป).
+te-kb consumption (utils-pm) · monkut/Discord push (phase 2, ADR-0004) · te-kb live overlay engine.
 
 ---
 🤖 build โดย worker1 จาก tony → worker1-oracle
