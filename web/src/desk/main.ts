@@ -213,9 +213,22 @@ let deciding = false;
 
 async function decide(outcome: "approve" | "reject" | "return") {
   if (!currentToken || deciding) return;
-  deciding = true;
   const comment = $<HTMLTextAreaElement>("#comment").value.trim();
   const strokes = engine.getStrokes();
+
+  // Return must carry feedback — otherwise the Asker is sent back without knowing
+  // what to fix (defeats the purpose). Approve/Reject may be empty.
+  if (outcome === "return" && !comment && strokes.length === 0) {
+    alert("Return ต้องมี comment หรือ ปากกา — บอก Asker ว่าให้แก้อะไร");
+    return;
+  }
+  // Approve/Reject are terminal + single-use — confirm to avoid an irreversible misclick.
+  if (outcome === "approve" || outcome === "reject") {
+    const label = outcome === "approve" ? "Approve ✅" : "Reject ⛔";
+    if (!confirm(`ยืนยัน ${label}? — เป็น decision สุดท้าย แก้ไม่ได้`)) return;
+  }
+
+  deciding = true;
   const feedback: { comment?: string; ink?: InkDoc } = {};
   if (comment) feedback.comment = comment;
   if (strokes.length) {
