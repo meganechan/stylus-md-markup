@@ -56,15 +56,56 @@ function setImageBackdrop(url: string) {
   previewEl.appendChild(img);
 }
 
+// Our Save-KB footer, as appended into the source paste. Stripping it on re-open
+// keeps the backdrop clean (no footer baked into tiles) and lets us recover the
+// existing job to continue. Matches the exact shape produced by buildRefBlock().
+const MARKUP_FOOTER_RE =
+  /\n\n---\n✏️ Markup \([^)\n]*\): \[ดู\]\([^)\n]*\) · \[แก้ไข\]\([^)\n]*?[?&]job=([A-Za-z0-9]{6,16})\)/g;
+
+// Remove our markup footers (only blocks matching the exact pattern — never user
+// text that merely contains "✏️ Markup") and return the clean md + the most recent
+// job id referenced (so a re-open continues that job instead of forking a new one).
+function stripMarkupFooter(md: string): { clean: string; jobId: string | null } {
+  let lastJobId: string | null = null;
+  MARKUP_FOOTER_RE.lastIndex = 0;
+  for (let m = MARKUP_FOOTER_RE.exec(md); m; m = MARKUP_FOOTER_RE.exec(md)) {
+    lastJobId = m[1];
+  }
+  if (lastJobId === null) return { clean: md, jobId: null };
+  const clean = md.replace(MARKUP_FOOTER_RE, "").replace(/\s+$/, "");
+  return { clean, jobId: lastJobId };
+}
+
 // External markdown Backdrop (te-kb edit button → ?src=<raw-md-url>).
 async function openMdFromUrl(url: string) {
-  const text = await fetchExternalMd(url);
+  const raw = await fetchExternalMd(url);
+  const { clean, jobId } = stripMarkupFooter(raw);
   backdropType = "md";
-  currentMdText = text;
-  currentBackdropRef = url; // provenance; external md uses absolute image URLs
+  currentMdText = clean;
+  currentBackdropRef = url; // source paste; slug → append/skip on Save KB
   currentJobId = null;
-  previewEl.innerHTML = renderMarkdown(text, "");
-  await afterBackdropLoaded([]);
+
+  // If this paste was already marked up, recover that job so a re-edit updates it
+  // (Save KB skips the append, /j/id tiles refresh) instead of appending a 2nd ref.
+  let strokes: ReturnType<typeof engine.getStrokes> = [];
+  let reusedNote = "";
+  if (jobId) {
+    try {
+      await loadJob(jobId); // throws if the job no longer exists
+      currentJobId = jobId;
+      strokes = (await loadJobStrokes(jobId)).strokes ?? [];
+      reusedNote = `↩️ แก้ต่อจาก markup เดิม (job ${jobId})`;
+    } catch {
+      currentJobId = null; // job gone → start fresh
+    }
+  }
+
+  previewEl.innerHTML = renderMarkdown(clean, "");
+  await afterBackdropLoaded(strokes);
+  if (reusedNote) {
+    resultText.textContent = reusedNote;
+    resultBanner.hidden = false;
+  }
 }
 
 async function openImageFile(file: File) {
