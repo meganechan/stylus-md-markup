@@ -45,6 +45,17 @@ async function openMdDoc(path: string) {
   await afterBackdropLoaded([]);
 }
 
+// Set an image Backdrop via setAttribute (not innerHTML) so a URL is never
+// parsed as HTML — robust even if a future source supplies an external URL.
+function setImageBackdrop(url: string) {
+  previewEl.replaceChildren();
+  const img = document.createElement("img");
+  img.id = "backdrop-img";
+  img.alt = "backdrop";
+  img.setAttribute("src", url);
+  previewEl.appendChild(img);
+}
+
 // External markdown Backdrop (te-kb edit button → ?src=<raw-md-url>).
 async function openMdFromUrl(url: string) {
   const text = await fetchExternalMd(url);
@@ -61,8 +72,7 @@ async function openImageFile(file: File) {
   currentBackdropBlob = file;
   currentJobId = null;
   currentMdText = null;
-  const url = URL.createObjectURL(file);
-  previewEl.innerHTML = `<img id="backdrop-img" src="${url}" alt="backdrop" />`;
+  setImageBackdrop(URL.createObjectURL(file));
   await afterBackdropLoaded([]);
 }
 
@@ -77,7 +87,7 @@ async function openJob(id: string) {
     previewEl.innerHTML = renderMarkdown(currentMdText, dir);
   } else {
     currentMdText = null;
-    previewEl.innerHTML = `<img id="backdrop-img" src="${job.backdropUrl}" alt="backdrop" />`;
+    setImageBackdrop(job.backdropUrl ?? `/api/jobs/${id}/backdrop`);
   }
   const ink = await loadJobStrokes(id);
   await afterBackdropLoaded(ink.strokes ?? []);
