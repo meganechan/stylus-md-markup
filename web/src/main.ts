@@ -4,10 +4,8 @@ import "./style.css";
 
 import { loadDoc, fetchExternalMd, loadJob, loadJobStrokes, loadJobMd, saveJob, publishJob } from "./api";
 import type { JobManifest } from "./api";
-import { renderMarkdown } from "./markdown";
-import { AnnotationEngine } from "./annotation";
-import { Viewport } from "./viewport";
-import { bakeTiles, exportMarkupImage, downloadBlob } from "./exporter";
+import { renderMarkdown } from "./markdown"; // backdrop provider (shared, not engine)
+import { AnnotationEngine, Viewport, bakeTiles, exportMarkupImage, downloadBlob } from "./engine";
 
 // --- elements --------------------------------------------------------------
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;

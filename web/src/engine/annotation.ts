@@ -7,7 +7,7 @@
 // Tools: pen (opaque), highlighter (wide + translucent), eraser (stroke-level).
 // Undo/redo is snapshot-based — simple and predictable for a POC.
 
-import type { Stroke, StrokePoint, Tool } from "./api";
+import type { Stroke, StrokePoint, Tool } from "./types";
 
 export class AnnotationEngine {
   private ctx: CanvasRenderingContext2D;
