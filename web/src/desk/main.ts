@@ -22,7 +22,7 @@ interface ReviewSummary {
 interface RoundHistory {
   roundNo: number;
   outcome: string;
-  comment?: string;
+  feedback?: { comment?: string; ink?: InkDoc };
   decidedAt: string;
 }
 interface ReviewEnvelope extends ReviewSummary {
@@ -111,9 +111,11 @@ function renderInbox() {
 
 async function loadPending() {
   try {
-    const arr = (await (await api("/api/pending")).json()) as ReviewSummary[];
+    // maw returns { pending: [...] }; tolerate a bare array too.
+    const data = await (await api("/api/pending")).json();
+    const arr: ReviewSummary[] = Array.isArray(data) ? data : (data?.pending ?? []);
     pending.clear();
-    if (Array.isArray(arr)) for (const s of arr) pending.set(s.reviewId, s);
+    for (const s of arr) pending.set(s.reviewId, s);
     renderInbox();
   } catch {
     /* leave existing list */
@@ -180,7 +182,9 @@ async function openReview(token: string) {
     $("#r-history-list").innerHTML = "";
     for (const h of hist) {
       const li = document.createElement("li");
-      li.textContent = `รอบ ${h.roundNo}: ${h.outcome}${h.comment ? " — " + h.comment : ""}`;
+      const c = h.feedback?.comment;
+      const inkMark = h.feedback?.ink?.strokes?.length ? " ✏️" : "";
+      li.textContent = `รอบ ${h.roundNo}: ${h.outcome}${c ? " — " + c : ""}${inkMark}`;
       $("#r-history-list").appendChild(li);
     }
   } else {
