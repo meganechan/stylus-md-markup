@@ -66,6 +66,38 @@ body.desk {
   margin-top: 10px;
 }
 
+/* notice panel (token-only: shown for /review, after a decision, or on error) */
+#notice {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.notice-card {
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+  padding: 28px 32px;
+  text-align: center;
+  max-width: 440px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+}
+.notice-card h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+.notice-card p {
+  color: #6b7280;
+  margin: 0;
+  font-size: 14px;
+}
+.notice-card code {
+  background: var(--bg, #f3f4f6);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
 /* layout */
 #desk {
   display: flex;

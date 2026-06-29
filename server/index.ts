@@ -578,7 +578,7 @@ console.log(
     ` → ${TEKB_BASE_URL} · public ${PUBLIC_BASE_URL} · append=${POSTBACK_APPEND_MODE} · ttl=${POSTBACK_TTL_HOURS}h`,
 );
 console.log(
-  `  review-desk = ${process.env.DESK_PASSPHRASE ? "ON (passphrase set)" : "OFF (no DESK_PASSPHRASE)"}` +
+  `  review-desk = token-only` +
     ` · maw ${process.env.MAW_BASE_URL && process.env.MAW_REVIEW_DESK_SECRET ? process.env.MAW_BASE_URL : "not configured"}`,
 );
 

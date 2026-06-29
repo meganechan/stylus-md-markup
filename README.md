@@ -105,27 +105,30 @@ te-kb consumption (utils-pm) · monkut/Discord push (phase 2, ADR-0004) · te-kb
 
 > Human-in-the-loop **approval gate** (ADR-0002). Asker (AI) ส่ง md → desk โชว์ **read-only** + ปากกา/comment → Reviewer (คน) กด **Approve / Reject / Return** → ส่งกลับ asker ผ่าน maw. desk **ไม่แก้ md** (asker เป็นเจ้าของ, revise เองข้าม Round). Domain: `eq3-oracle/ψ/writing/review-desk/`.
 
-## Routes / surface
+## Routes / surface — TOKEN-ONLY (capability link)
 
-- `/review` — inbox (SSE realtime + catch-up) ของ ReviewRequest ที่รอ
-- `/r/:token` — เปิด 1 Round: md read-only (engine backdrop) + ink overlay (engine pen) + comment box + 3 Decision + ContextNote/asker/deadline/Round history
+เปิด review ด้วยลิงก์ `/r/:token` (256-bit token = auth) อย่างเดียว — **ไม่มี passphrase, ไม่เปิด public inbox**. (ลิงก์ส่งหา reviewer ผ่าน Discord/maw)
+
+- `/r/:token` — เปิด 1 Round: md read-only (engine backdrop) + ink overlay (engine pen) + comment box + 3 Decision + ContextNote/asker/deadline/Round history. ข้าม login (token=capability)
+- `/review` — หน้า notice "เปิด review จากลิงก์ของคุณ" (ไม่ list review/tokens สู่ public)
 - ใช้ **ink engine ร่วม** (`web/src/engine/`) ตัวเดียวกับ markup
 
 ## Backend (server-side, `server/review-desk.ts`)
 
-browser ↔ desk-backend (passphrase session cookie) · desk-backend ↔ maw (Bearer `MAW_REVIEW_DESK_SECRET`, server-to-server — browser ไม่แตะ maw ตรง, แก้ปัญหา EventSource ใส่ header ไม่ได้).
+browser ↔ desk-backend (token ใน URL = capability) · desk-backend ↔ maw (Bearer `MAW_REVIEW_DESK_SECRET`, server-to-server — browser ไม่แตะ maw ตรง). maw validate token เอง.
 
 | Method | Path | หน้าที่ |
 |--------|------|---------|
-| POST | `/api/login` `/api/logout` `GET /api/session` | passphrase gate (session cookie) |
-| GET | `/api/pending` | → proxy maw `/api/review/pending` (snapshot) |
-| GET | `/api/stream` | SSE → relay maw `/api/review/stream` + heartbeat (`: ping`) hop ที่ 2 |
-| GET | `/api/review/:token` | → proxy maw envelope + history |
+| GET | `/r/:token` · `/review` | serve desk html (+ `Referrer-Policy: no-referrer`) |
+| GET | `/api/review/:token` | → proxy maw envelope + history (token = capability) |
 | POST | `/api/review/:token/decision` | → proxy maw `{outcome, feedback:{comment?, ink?}}` (opaque) |
+| GET | `/api/pending` · `/api/stream` | **404 — public inbox disabled** |
 
-**feedback.ink** = engine `InkDoc` (vector strokes) เดิม — opaque pass-through (maw ไม่ตีความ). **contentType seam**: v0 render `markdown`; ชนิดอื่น → "unsupported" (comment ได้). catch-up: connect/reconnect → `/api/pending` snapshot → stream delta.
+**feedback.ink** = engine `InkDoc` (vector strokes) — opaque pass-through (maw ไม่ตีความ). **contentType seam**: v0 render `markdown`; ชนิดอื่น → "unsupported" (comment ได้).
 
-**Env (desk coolify app only)**: `DESK_PASSPHRASE` · `MAW_REVIEW_DESK_SECRET` (shared secret, server-side) · `MAW_BASE_URL` (maw review-plane base; no hardcode). ไม่ตั้ง → desk ปิด. Secret ไม่เคยถึง frontend bundle.
+**Hardening (token อยู่ใน URL)**: `Referrer-Policy: no-referrer` (+ `<meta name=referrer>`) กัน token หลุดทาง Referer · ไม่ log token · token single-use(decision) + expire 24h (maw).
+
+**Env (desk coolify app only)**: `MAW_REVIEW_DESK_SECRET` (shared secret, server-side) · `MAW_BASE_URL` (maw review-plane base; no hardcode). **ไม่มี passphrase** (token-only). Secret ไม่เคยถึง frontend bundle.
 
 **Deploy** (pm1): coolify app แยกจาก image เดียวกัน → `review.notscam.space`. มาตรฐาน Dockerfile เดิม, config ผ่าน env.
 
@@ -134,10 +137,10 @@ browser ↔ desk-backend (passphrase session cookie) · desk-backend ↔ maw (Be
 | # | ข้อ | ที่อยู่ |
 |---|-----|--------|
 | 1 | markup `/` ไม่ regress | engine refactor (step1) · verified green |
-| 2 | `/review` SSE inbox realtime + catch-up | `desk/main.ts` · `/api/stream` relay |
+| 2 | `/r/:token` ตรง → ไม่ login → ใช้ได้ (token=auth) | `desk/main.ts route` · `review-desk.ts` |
 | 3 | open review → md read-only + pen + comment + ContextNote + Decision | `desk/main.ts openReview` |
 | 4 | Decision → maw `{outcome, feedback:{comment,ink}}` | `/api/review/:token/decision` proxy |
-| 5 | token single-use · passphrase gate · secret ไม่อยู่ใน bundle | maw 409 · session cookie · server-only env |
+| 5 | public inbox ปิด (`/api/pending`=404) · `Referrer-Policy: no-referrer` · secret ไม่อยู่ใน bundle | `review-desk.ts` |
 | 6 | deploy `review.notscam.space` แยก app | pm1 (coolify) |
 
 ## Deferred (Review Desk)
