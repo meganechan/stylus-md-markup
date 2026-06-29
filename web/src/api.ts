@@ -1,25 +1,10 @@
 // Client for the Markup Service backend.
+//
+// Stroke/ink types live in the engine (the backend client just transports them);
+// re-exported here so existing importers of "./api" keep working.
 
-export type Tool = "pen" | "highlighter" | "eraser";
-
-export interface StrokePoint {
-  x: number;
-  y: number;
-}
-
-export interface Stroke {
-  tool: Tool;
-  color: string;
-  width: number;
-  points: StrokePoint[];
-}
-
-export interface InkDoc {
-  version: number;
-  strokes: Stroke[];
-  pageWidth?: number;
-  pageHeight?: number;
-}
+export type { Tool, StrokePoint, Stroke, InkDoc } from "./engine/types";
+import type { InkDoc } from "./engine/types";
 
 export interface DocPayload {
   path: string;
