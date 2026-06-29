@@ -1,5 +1,13 @@
 /* Review Desk — surface-specific styles (engine/page/toolbar come from style.css) */
 
+/* The `hidden` attribute must always win. Several elements here set an explicit
+   id/class `display` (flex/absolute), whose ID specificity (1,0,0) beats the UA
+   rule `[hidden]{display:none}` (0,1,0) — so without this, hidden login/inbox/
+   review/unsupported still render and overlap. One rule covers them all. */
+[hidden] {
+  display: none !important;
+}
+
 body.desk {
   margin: 0;
   background: var(--bg, #f3f4f6);
@@ -14,11 +22,6 @@ body.desk {
   justify-content: center;
   background: var(--bg, #f3f4f6);
   z-index: 50;
-}
-/* the ID rule above overrides the `hidden` attribute's display:none, so restore
-   it explicitly — otherwise the overlay covers the desk even when authed. */
-#login[hidden] {
-  display: none;
 }
 .login-card {
   background: #fff;
