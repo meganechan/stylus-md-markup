@@ -8,77 +8,47 @@ import { AnnotationEngine, Viewport, attachInkPointer } from "../engine";
 import type { InkDoc } from "../engine";
 
 // --- types (maw review contract) -------------------------------------------
-interface ReviewSummary {
-  reviewId: string;
-  threadId: string;
-  roundNo: number;
-  title: string;
-  asker: string;
-  contextNote: string;
-  createdAt: string;
-  expiresAt: string;
-  token: string; // capability to open this Round
-}
 interface RoundHistory {
   roundNo: number;
   outcome: string;
   feedback?: { comment?: string; ink?: InkDoc };
   decidedAt: string;
 }
-interface ReviewEnvelope extends ReviewSummary {
+interface ReviewEnvelope {
+  reviewId: string;
+  threadId: string;
+  roundNo: number;
+  title: string;
+  asker: string;
+  contextNote: string;
   md: string;
   contentType?: string;
+  createdAt: string;
+  expiresAt: string;
   status: string;
   history?: RoundHistory[];
 }
 
 // --- dom -------------------------------------------------------------------
 const $ = <T extends HTMLElement>(s: string) => document.querySelector(s) as T;
-const loginEl = $("#login");
-const deskEl = $("#desk");
-const inboxEl = $("#inbox");
 const reviewEl = $("#review");
-const listEl = $<HTMLUListElement>("#inbox-list");
+const noticeEl = $("#notice");
 
 const engine = new AnnotationEngine($<HTMLCanvasElement>("#ink"));
 const viewport = new Viewport($("#viewport"), $("#page"));
 attachInkPointer($("#viewport"), engine, viewport);
 
-// --- tiny api client -------------------------------------------------------
+function showNotice(msg: string, title = "🗂️ Review Desk") {
+  reviewEl.hidden = true;
+  $("#notice-title").textContent = title;
+  $("#notice-msg").innerHTML = msg;
+  noticeEl.hidden = false;
+}
+
 async function api(path: string, init?: RequestInit) {
   return fetch(path, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
 }
 
-// --- auth ------------------------------------------------------------------
-async function ensureAuthed(): Promise<boolean> {
-  try {
-    const s = await (await api("/api/session")).json();
-    return !!s.authed;
-  } catch {
-    return false;
-  }
-}
-function showLogin() {
-  loginEl.hidden = false;
-  deskEl.hidden = true;
-}
-$("#login-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const err = $("#login-error");
-  err.hidden = true;
-  const passphrase = $<HTMLInputElement>("#passphrase").value;
-  const r = await api("/api/login", { method: "POST", body: JSON.stringify({ passphrase }) });
-  if (r.ok) {
-    loginEl.hidden = true;
-    deskEl.hidden = false;
-    void route();
-  } else {
-    err.textContent = "passphrase ไม่ถูกต้อง";
-    err.hidden = false;
-  }
-});
-
-// --- deadline formatting ---------------------------------------------------
 function deadlineText(expiresAt: string): string {
   const ms = new Date(expiresAt).getTime() - Date.now();
   if (Number.isNaN(ms)) return "";
@@ -88,65 +58,7 @@ function deadlineText(expiresAt: string): string {
   return h >= 1 ? `⏳ เหลือ ~${h}ชม` : `⏳ เหลือ ~${m}น`;
 }
 
-// --- inbox -----------------------------------------------------------------
-const pending = new Map<string, ReviewSummary>(); // keyed by reviewId
-
-function renderInbox() {
-  listEl.innerHTML = "";
-  const items = [...pending.values()].sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
-  $("#inbox-count").textContent = String(items.length);
-  $("#inbox-empty").hidden = items.length > 0;
-  for (const it of items) {
-    const li = document.createElement("li");
-    li.className = "inbox-item";
-    li.innerHTML =
-      `<a href="/r/${encodeURIComponent(it.token)}"><span class="it-title"></span>` +
-      `<span class="it-sub"></span></a>`;
-    li.querySelector(".it-title")!.textContent = it.title || "(ไม่มีหัวข้อ)";
-    li.querySelector(".it-sub")!.textContent =
-      `${it.asker} · รอบ ${it.roundNo} · ${deadlineText(it.expiresAt)}`;
-    listEl.appendChild(li);
-  }
-}
-
-async function loadPending() {
-  try {
-    // maw returns { pending: [...] }; tolerate a bare array too.
-    const data = await (await api("/api/pending")).json();
-    const arr: ReviewSummary[] = Array.isArray(data) ? data : (data?.pending ?? []);
-    pending.clear();
-    for (const s of arr) pending.set(s.reviewId, s);
-    renderInbox();
-  } catch {
-    /* leave existing list */
-  }
-}
-
-let es: EventSource | null = null;
-function connectStream() {
-  es?.close();
-  es = new EventSource("/api/stream");
-  const conn = $("#conn");
-  es.onopen = () => {
-    conn.classList.add("live");
-    void loadPending(); // re-snapshot on (re)connect — never miss an item
-  };
-  es.onerror = () => conn.classList.remove("live"); // EventSource auto-reconnects
-  es.addEventListener("review.created", (e) => {
-    const s = JSON.parse((e as MessageEvent).data) as ReviewSummary;
-    pending.set(s.reviewId, s);
-    renderInbox();
-  });
-  const drop = (e: Event) => {
-    const s = JSON.parse((e as MessageEvent).data) as ReviewSummary;
-    pending.delete(s.reviewId);
-    renderInbox();
-  };
-  es.addEventListener("review.decided", drop);
-  es.addEventListener("review.expired", drop);
-}
-
-// --- review view -----------------------------------------------------------
+// --- open one review (by token) --------------------------------------------
 async function sizePage() {
   await new Promise((r) => requestAnimationFrame(() => r(null)));
   const w = $("#preview").offsetWidth;
@@ -156,15 +68,19 @@ async function sizePage() {
 }
 
 async function openReview(token: string) {
-  inboxEl.hidden = true;
+  noticeEl.hidden = true;
   reviewEl.hidden = false;
   let env: ReviewEnvelope;
   try {
     const r = await api(`/api/review/${encodeURIComponent(token)}`);
+    if (r.status === 404 || r.status === 410) {
+      showNotice("ลิงก์รีวิวนี้ไม่พบหรือหมดอายุแล้ว", "🔗 ลิงก์ใช้ไม่ได้");
+      return;
+    }
     if (!r.ok) throw new Error(`${r.status}`);
     env = await r.json();
   } catch (e) {
-    $("#r-title").textContent = "เปิดรีวิวไม่สำเร็จ: " + (e as Error).message;
+    showNotice("เปิดรีวิวไม่สำเร็จ: " + (e as Error).message, "⚠️ ผิดพลาด");
     return;
   }
 
@@ -174,7 +90,6 @@ async function openReview(token: string) {
   $("#r-deadline").textContent = deadlineText(env.expiresAt);
   $("#r-context").textContent = env.contextNote ?? "";
 
-  // Round history
   const hist = env.history ?? [];
   const histEl = $("#r-history");
   if (hist.length) {
@@ -191,7 +106,7 @@ async function openReview(token: string) {
     histEl.hidden = true;
   }
 
-  // backdrop — only markdown is renderable in v0 (contentType seam)
+  // backdrop — only markdown renders in v0 (contentType seam)
   const unsupported = $("#r-unsupported");
   const ct = env.contentType ?? "markdown";
   if (ct === "markdown") {
@@ -220,8 +135,8 @@ async function decide(outcome: "approve" | "reject" | "return") {
   const comment = $<HTMLTextAreaElement>("#comment").value.trim();
   const strokes = engine.getStrokes();
 
-  // Return must carry feedback — otherwise the Asker is sent back without knowing
-  // what to fix (defeats the purpose). Approve/Reject may be empty.
+  // Return must carry feedback — else the Asker is sent back without knowing what
+  // to fix. Approve/Reject may be empty.
   if (outcome === "return" && !comment && strokes.length === 0) {
     alert("Return ต้องมี comment หรือ ปากกา — บอก Asker ว่าให้แก้อะไร");
     return;
@@ -249,8 +164,10 @@ async function decide(outcome: "approve" | "reject" | "return") {
       alert(`ส่ง Decision ไม่สำเร็จ (${r.status}): ${e.error ?? ""}`);
       return;
     }
-    // success → back to inbox (the item drops via SSE review.decided too)
-    location.href = "/review";
+    // token-only: no inbox to return to — show a terminal confirmation.
+    const word = outcome === "approve" ? "Approve ✅" : outcome === "reject" ? "Reject ⛔" : "Return ↩️";
+    currentToken = null;
+    showNotice(`ส่ง <b>${word}</b> ให้ผู้ขอแล้ว — ปิดหน้านี้ได้`, "✅ เสร็จสิ้น");
   } catch (e) {
     alert("ส่ง Decision ไม่สำเร็จ: " + (e as Error).message);
   } finally {
@@ -320,40 +237,17 @@ function buildToolbar() {
 }
 engine.onChange = () => syncToolbar();
 
-// --- router ----------------------------------------------------------------
-async function route() {
+// --- router (token-only) ----------------------------------------------------
+function route() {
   const m = location.pathname.match(/^\/r\/([^/]+)$/);
   if (m) {
-    inboxEl.hidden = true;
-    reviewEl.hidden = false;
-    await openReview(decodeURIComponent(m[1]));
+    void openReview(decodeURIComponent(m[1]));
   } else {
-    reviewEl.hidden = true;
-    inboxEl.hidden = false;
-    await loadPending();
-    if (!es) connectStream();
+    showNotice("เปิด review จากลิงก์ของคุณ (<code>/r/&lt;token&gt;</code>)");
   }
 }
-window.addEventListener("popstate", () => void route());
-// intercept in-app links for SPA nav
-document.addEventListener("click", (e) => {
-  const a = (e.target as HTMLElement).closest("a");
-  if (!a) return;
-  const href = a.getAttribute("href") ?? "";
-  if (href.startsWith("/r/") || href === "/review") {
-    e.preventDefault();
-    history.pushState(null, "", href);
-    void route();
-  }
-});
+window.addEventListener("popstate", route);
 
 // --- boot ------------------------------------------------------------------
 buildToolbar();
-(async () => {
-  if (await ensureAuthed()) {
-    deskEl.hidden = false;
-    await route();
-  } else {
-    showLogin();
-  }
-})();
+route();

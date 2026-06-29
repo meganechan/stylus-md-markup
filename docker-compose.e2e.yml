@@ -17,7 +17,7 @@ services:
     container_name: review-desk
     environment:
       PORT: 8080
-      DESK_PASSPHRASE: ${DESK_PASSPHRASE:?set DESK_PASSPHRASE in .env}
+      # token-only mode — no passphrase. Secret is for the desk→maw proxy hop.
       MAW_REVIEW_DESK_SECRET: ${MAW_REVIEW_DESK_SECRET:?set MAW_REVIEW_DESK_SECRET in .env (same as maw)}
       MAW_BASE_URL: ${MAW_BASE_URL:-http://maw:3456}
     ports:

@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="referrer" content="no-referrer" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
@@ -9,34 +10,23 @@
     <title>Review Desk</title>
   </head>
   <body class="desk">
-    <!-- passphrase gate -->
-    <div id="login" hidden>
-      <form class="login-card" id="login-form">
-        <h1>🗂️ Review Desk</h1>
-        <p>ใส่ passphrase เพื่อเข้าโต๊ะรีวิว</p>
-        <input type="password" id="passphrase" placeholder="passphrase" autocomplete="current-password" />
-        <button type="submit">เข้า</button>
-        <p class="login-error" id="login-error" hidden></p>
-      </form>
-    </div>
-
-    <main id="desk" hidden>
+    <main id="desk">
       <header id="desk-head">
-        <a href="/review" id="desk-title">🗂️ Review Desk</a>
-        <span id="conn" class="conn" title="realtime connection">●</span>
+        <span id="desk-title">🗂️ Review Desk</span>
+        <span id="conn" class="conn" hidden></span>
       </header>
 
-      <!-- inbox -->
-      <section id="inbox">
-        <h2>รอรีวิว (<span id="inbox-count">0</span>)</h2>
-        <ul id="inbox-list"></ul>
-        <p id="inbox-empty" class="muted">ยังไม่มีงานรอรีวิว</p>
+      <!-- notice: shown for /review (no token), after a decision, or on error -->
+      <section id="notice" hidden>
+        <div class="notice-card">
+          <h1 id="notice-title">🗂️ Review Desk</h1>
+          <p id="notice-msg">เปิด review จากลิงก์ของคุณ (<code>/r/&lt;token&gt;</code>)</p>
+        </div>
       </section>
 
-      <!-- one review -->
+      <!-- one review (opened by token) -->
       <section id="review" hidden>
         <div id="review-meta">
-          <a href="/review" class="back">← inbox</a>
           <h2 id="r-title"></h2>
           <div class="r-sub">
             <span id="r-asker"></span> · รอบ <span id="r-round"></span> ·
