@@ -21,6 +21,7 @@ import type { Context } from "hono";
 import { serveStatic } from "hono/bun";
 import { resolve, join, relative, sep, dirname } from "node:path";
 import { readFile, writeFile, stat, mkdir, readdir, unlink } from "node:fs/promises";
+import { registerReviewDesk } from "./review-desk";
 
 const DOCS_DIR = resolve(process.env.DOCS_DIR ?? "./docs-sample");
 // Markup Jobs live in their OWN writable store — never inside DOCS_DIR. This lets
@@ -558,6 +559,9 @@ ${tileImgs || "<p>(no tiles)</p>"}
   return c.html(html);
 });
 
+// --- Review Desk surface (ADR-0002) — registered before the catch-all --------
+registerReviewDesk(app, WEB_DIR);
+
 // --- serve built frontend --------------------------------------------------
 app.use("/assets/*", serveStatic({ root: relative(process.cwd(), WEB_DIR) || "." }));
 app.get("/", serveStatic({ path: join(relative(process.cwd(), WEB_DIR) || ".", "index.html") }));
@@ -572,6 +576,10 @@ console.log(`  WEB_DIR  = ${WEB_DIR}`);
 console.log(
   `  post-back = ${TEKB_PASTE_TOKEN ? "ON" : "OFF (no TEKB_PASTE_TOKEN — publish skipped)"}` +
     ` → ${TEKB_BASE_URL} · public ${PUBLIC_BASE_URL} · append=${POSTBACK_APPEND_MODE} · ttl=${POSTBACK_TTL_HOURS}h`,
+);
+console.log(
+  `  review-desk = ${process.env.DESK_PASSPHRASE ? "ON (passphrase set)" : "OFF (no DESK_PASSPHRASE)"}` +
+    ` · maw ${process.env.MAW_BASE_URL && process.env.MAW_REVIEW_DESK_SECRET ? process.env.MAW_BASE_URL : "not configured"}`,
 );
 
 export default {

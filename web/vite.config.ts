@@ -1,7 +1,9 @@
 import { defineConfig } from "vite";
+import { resolve } from "node:path";
 
+// Two surfaces, one repo (ADR-0002): the markup tool (index.html) and the review
+// desk (review.html), both consuming the shared ink engine.
 // Dev: proxy API + static mount to the Bun backend on :8080.
-// Build: emit to ../web/dist (served by the backend in the container).
 export default defineConfig({
   server: {
     proxy: {
@@ -12,5 +14,11 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        review: resolve(__dirname, "review.html"),
+      },
+    },
   },
 });

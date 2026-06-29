@@ -18,6 +18,12 @@ services:
       - POSTBACK_TTL_HOURS=${POSTBACK_TTL_HOURS:-720}
       # "once" = 1 ref per job (skip re-append on repeat saves); "always" = history
       - POSTBACK_APPEND_MODE=${POSTBACK_APPEND_MODE:-once}
+      # Review Desk surface (ADR-0002) — set these on the DESK coolify app only
+      # (review.notscam.space). All secret/maw env injected at runtime, never
+      # committed. Unset → desk login + maw routes are disabled.
+      - DESK_PASSPHRASE=${DESK_PASSPHRASE:-}
+      - MAW_REVIEW_DESK_SECRET=${MAW_REVIEW_DESK_SECRET:-}
+      - MAW_BASE_URL=${MAW_BASE_URL:-}
     volumes:
       # markdown Backdrop source -> /docs, mounted READ-ONLY (ADR-0002):
       # the tool physically cannot modify the author's source files.

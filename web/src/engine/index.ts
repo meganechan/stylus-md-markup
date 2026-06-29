@@ -10,3 +10,5 @@ export type { Tool, StrokePoint, Stroke, InkDoc } from "./types";
 export { AnnotationEngine } from "./annotation";
 export { Viewport } from "./viewport";
 export { bakeTiles, exportMarkupImage, downloadBlob, TILE_MAX } from "./exporter";
+export { attachInkPointer } from "./pointer";
+export type { InkPointerControl } from "./pointer";

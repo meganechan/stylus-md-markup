@@ -1,5 +1,10 @@
 # Stylus Markup Service
 
+> **2 surfaces, 1 repo, 1 ink engine** (ADR-0002 · ดู `CONTEXT-MAP.md`):
+> **Stylus Markup** (`/`) — วาดรีวิวบน Backdrop → Markup Job → te-kb · **Review Desk** (`/review`) — approval gate: md read-only + ink + comment → Decision → maw.
+
+## Stylus Markup (surface 1)
+
 > วาดรีวิวด้วยลายมือบน **Backdrop** (markdown หรือรูป) → เก็บเป็น **Markup Job** บน server → consumer (คน · Claude · te-kb) มา pull.
 > ต้นฉบับ Backdrop **read-only** · strokes เป็น vector (แก้ต่อได้) · baked tiles ≤1500px ให้ vision อ่านคม · ไม่มี OCR.
 > v2 ของ POC `stylus-md-markup`. ศัพท์/เหตุผล: `CONTEXT.md` + ADR-0001..0005 (pm1-oracle).
@@ -93,6 +98,51 @@ Pan/zoom = 2 นิ้ว (ใช้ได้ขณะปากกาวาด) 
 ## Out of scope (worker1)
 
 te-kb consumption (utils-pm) · monkut/Discord push (phase 2, ADR-0004) · te-kb live overlay engine.
+
+---
+
+# Review Desk (surface 2)
+
+> Human-in-the-loop **approval gate** (ADR-0002). Asker (AI) ส่ง md → desk โชว์ **read-only** + ปากกา/comment → Reviewer (คน) กด **Approve / Reject / Return** → ส่งกลับ asker ผ่าน maw. desk **ไม่แก้ md** (asker เป็นเจ้าของ, revise เองข้าม Round). Domain: `eq3-oracle/ψ/writing/review-desk/`.
+
+## Routes / surface
+
+- `/review` — inbox (SSE realtime + catch-up) ของ ReviewRequest ที่รอ
+- `/r/:token` — เปิด 1 Round: md read-only (engine backdrop) + ink overlay (engine pen) + comment box + 3 Decision + ContextNote/asker/deadline/Round history
+- ใช้ **ink engine ร่วม** (`web/src/engine/`) ตัวเดียวกับ markup
+
+## Backend (server-side, `server/review-desk.ts`)
+
+browser ↔ desk-backend (passphrase session cookie) · desk-backend ↔ maw (Bearer `MAW_REVIEW_DESK_SECRET`, server-to-server — browser ไม่แตะ maw ตรง, แก้ปัญหา EventSource ใส่ header ไม่ได้).
+
+| Method | Path | หน้าที่ |
+|--------|------|---------|
+| POST | `/api/login` `/api/logout` `GET /api/session` | passphrase gate (session cookie) |
+| GET | `/api/pending` | → proxy maw `/api/review/pending` (snapshot) |
+| GET | `/api/stream` | SSE → relay maw `/api/review/stream` + heartbeat (`: ping`) hop ที่ 2 |
+| GET | `/api/review/:token` | → proxy maw envelope + history |
+| POST | `/api/review/:token/decision` | → proxy maw `{outcome, feedback:{comment?, ink?}}` (opaque) |
+
+**feedback.ink** = engine `InkDoc` (vector strokes) เดิม — opaque pass-through (maw ไม่ตีความ). **contentType seam**: v0 render `markdown`; ชนิดอื่น → "unsupported" (comment ได้). catch-up: connect/reconnect → `/api/pending` snapshot → stream delta.
+
+**Env (desk coolify app only)**: `DESK_PASSPHRASE` · `MAW_REVIEW_DESK_SECRET` (shared secret, server-side) · `MAW_BASE_URL` (maw review-plane base; no hardcode). ไม่ตั้ง → desk ปิด. Secret ไม่เคยถึง frontend bundle.
+
+**Deploy** (pm1): coolify app แยกจาก image เดียวกัน → `review.notscam.space`. มาตรฐาน Dockerfile เดิม, config ผ่าน env.
+
+## Acceptance (Review Desk)
+
+| # | ข้อ | ที่อยู่ |
+|---|-----|--------|
+| 1 | markup `/` ไม่ regress | engine refactor (step1) · verified green |
+| 2 | `/review` SSE inbox realtime + catch-up | `desk/main.ts` · `/api/stream` relay |
+| 3 | open review → md read-only + pen + comment + ContextNote + Decision | `desk/main.ts openReview` |
+| 4 | Decision → maw `{outcome, feedback:{comment,ink}}` | `/api/review/:token/decision` proxy |
+| 5 | token single-use · passphrase gate · secret ไม่อยู่ใน bundle | maw 409 · session cookie · server-only env |
+| 6 | deploy `review.notscam.space` แยก app | pm1 (coolify) |
+
+## Deferred (Review Desk)
+
+Phase C (monkut Discord notify) · `contentType=ui` (v2, reuse engine สำหรับ visual review).
 
 ---
 🤖 build โดย worker1 จาก tony → worker1-oracle
