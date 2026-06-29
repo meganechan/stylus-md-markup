@@ -15,6 +15,11 @@ body.desk {
   background: var(--bg, #f3f4f6);
   z-index: 50;
 }
+/* the ID rule above overrides the `hidden` attribute's display:none, so restore
+   it explicitly — otherwise the overlay covers the desk even when authed. */
+#login[hidden] {
+  display: none;
+}
 .login-card {
   background: #fff;
   border: 1px solid var(--border, #e5e7eb);
