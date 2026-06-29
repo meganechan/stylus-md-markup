@@ -1,0 +1,34 @@
+# Review Desk e2e — the desk container joins patchwork's maw review-plane on the
+# shared external docker network `review-desk-net`.
+#
+# 1) Bring up maw first (in maw-js-dev), which creates the network + maw service:
+#      MAW_REVIEW_DESK_SECRET=<secret> \
+#      MAW_REVIEW_DESK_URL=http://localhost:8861 \
+#      docker compose -f docker/review-plane.compose.yml up -d --build
+# 2) Then bring up the desk here:
+#      docker compose -f docker-compose.e2e.yml up -d --build
+#
+# Secrets via .env (gitignored): DESK_PASSPHRASE + MAW_REVIEW_DESK_SECRET (the SAME
+# value set on maw) + MAW_BASE_URL=http://maw:3456.
+
+services:
+  desk:
+    build: .
+    container_name: review-desk
+    environment:
+      PORT: 8080
+      DESK_PASSPHRASE: ${DESK_PASSPHRASE:?set DESK_PASSPHRASE in .env}
+      MAW_REVIEW_DESK_SECRET: ${MAW_REVIEW_DESK_SECRET:?set MAW_REVIEW_DESK_SECRET in .env (same as maw)}
+      MAW_BASE_URL: ${MAW_BASE_URL:-http://maw:3456}
+    ports:
+      # 127.0.0.1 only for local e2e (chrome). desk↔maw is in-network.
+      - "127.0.0.1:${DESK_HOST_PORT:-8861}:8080"
+    networks:
+      - review-desk-net
+    restart: unless-stopped
+
+networks:
+  # joins the network created by maw's review-plane.compose.yml
+  review-desk-net:
+    external: true
+    name: review-desk-net

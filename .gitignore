@@ -3,6 +3,10 @@ web/node_modules/
 web/dist/
 *.log
 .DS_Store
+# secrets — never commit (desk passphrase / maw secret go here, env-only)
+.env
+.env.*
+!.env.example
 # markup job store (runtime, separate from docs — ADR-0002)
 jobs-data/
 ink-data/
