@@ -61,6 +61,7 @@ Backdrop (render md  |  upload รูป  |  ดึง md จาก md-paste ?sr
 - Env: `MDPASTE_API_KEY` (publish + read proxy; ไม่ตั้ง → skip เงียบ, job ยังเซฟ) · `MDPASTE_BASE_URL` (`paste.codechill.io`) · `PUBLIC_BASE_URL` (`ink.notscam.space`) · `POSTBACK_TTL_HOURS` (720, clamp [1,2160]) · `POSTBACK_APPEND_MODE` (`once`|`always`)
 - records ใน job: `appendedTo` (1-ref) + `appends[]` / `pastes[]` history (Nothing-is-Deleted) · publish ล้ม → job local ยังอยู่
 - md-paste's public read (`GET /p/:slug`) เป็น password-gated (fail closed) ไม่ใช่ CORS `*` เปิดแบบ te-kb เดิม ⇒ `?src=` edit button อ่านผ่าน server proxy `GET /api/external-md/:slug` แทนการ fetch ตรงจาก browser
+- **`GET /api/external-md/:slug` read gate (kobo-1127 round-2)** — proxy นี้ถือ Bearer key ที่อ่านได้ทุก slug บน md-paste แบบไม่ scope ต่อเจ้าของ ⇒ ถ้าเปิดเฉยๆ จะกลายเป็นช่องอ่านทุก paste บน md-paste แบบไม่ auth ผ่าน stylus. Gate ด้วย `MDPASTE_READ_PASSWORD` (header `x-mdpaste-read-password`, timing-safe compare) เช็ค**ก่อน**ตรวจ slug/เรียก upstream ใดๆ — ไม่ตั้งค่า หรือ header ผิด/ไม่มี → 401 เดียวกันหมด (ไม่แยก 400/404/410 ให้คนไม่ auth เห็น ปิด existence oracle เหมือน md-paste เอง) · browser ฝั่ง `web/src/api.ts` prompt รหัสครั้งเดียว แคชใน `sessionStorage`, ผิด → เคลียร์แคช + แจ้ง error (ไม่วน retry เอง)
 
 ## Run — Docker
 

@@ -74,7 +74,7 @@ function stripMarkupFooter(md: string): { clean: string; jobId: string | null } 
   return { clean, jobId: lastJobId };
 }
 
-// External markdown Backdrop (te-kb edit button → ?src=<raw-md-url>).
+// External markdown Backdrop (md-paste edit button → ?src=<paste-url>).
 async function openMdFromUrl(url: string) {
   const raw = await fetchExternalMd(url);
   const { clean, jobId } = stripMarkupFooter(raw);
@@ -130,7 +130,7 @@ async function openJob(id: string) {
   }
   const ink = await loadJobStrokes(id);
   await afterBackdropLoaded(ink.strokes ?? []);
-  // surface a prior te-kb publish (appended ref, or a fallback new paste)
+  // surface a prior md-paste publish (appended ref, or a fallback new paste)
   const prior = job.appendedTo ?? job.lastPaste;
   if (prior) {
     resultText.innerHTML = `📚 job นี้ลง KB แล้ว: <a href="${prior.url}" target="_blank">${prior.url}</a>`;
@@ -169,7 +169,7 @@ function watchImages() {
 
 // ---------------------------------------------------------------------------
 // Save KB — the single save action: persist the Markup Job (bake tiles) then
-// post-back to te-kb (append a ref to the source paste, or create a new paste).
+// post-back to md-paste (append a ref to the source paste, or create a new paste).
 // PNG download is the only other action. (No separate local-only save.)
 // ---------------------------------------------------------------------------
 
@@ -417,7 +417,7 @@ function buildToolbar() {
   right.append(
     button("⬇️ PNG", "ดาวน์โหลด PNG", doDownloadPng, "btn-png"),
     (() => {
-      const b = button("💾 Save KB", "บันทึก + ลง te-kb", () => void doSaveKB(), "btn-savekb");
+      const b = button("💾 Save KB", "บันทึก + ลง md-paste", () => void doSaveKB(), "btn-savekb");
       b.classList.add("primary");
       return b;
     })(),

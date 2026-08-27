@@ -21,6 +21,7 @@ import type { Context } from "hono";
 import { serveStatic } from "hono/bun";
 import { resolve, join, relative, sep, dirname } from "node:path";
 import { readFile, writeFile, stat, mkdir, readdir, unlink } from "node:fs/promises";
+import { timingSafeEqual, createHash } from "node:crypto";
 import { registerReviewDesk } from "./review-desk";
 
 const DOCS_DIR = resolve(process.env.DOCS_DIR ?? "./docs-sample");
@@ -36,6 +37,12 @@ const MAX_UPLOAD = Number(process.env.MAX_UPLOAD ?? 10 * 1024 * 1024); // 10MB
 // skipped silently, and the external-md read proxy fails closed (503).
 const MDPASTE_API_KEY = process.env.MDPASTE_API_KEY ?? "";
 const MDPASTE_BASE_URL = (process.env.MDPASTE_BASE_URL ?? "https://paste.codechill.io").replace(/\/$/, "");
+// Read gate on OUR OWN external-md proxy (kobo-1127 round-2 fix), mirroring
+// md-paste's own read-password concept: without this, GET /api/external-md/:slug
+// was an unauthenticated, internet-facing bypass of md-paste's read gate — anyone
+// who knows a 16-char slug could read that paste through us, for every paste on
+// the service, not only stylus's own. Unset → the proxy fails closed (503).
+const MDPASTE_READ_PASSWORD = process.env.MDPASTE_READ_PASSWORD ?? "";
 // Public origin of THIS service, used to build absolute tile/edit URLs in the paste.
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "https://ink.notscam.space").replace(/\/$/, "");
 // TTL for published pastes (md-paste contract: explicit, clamped [1, pasteMaxTtlHours=2160]).
@@ -419,6 +426,14 @@ function mdPastePost(url: string, body: unknown): Promise<Response> {
 // md-paste slugs are exactly 16 base62 chars (server-side contract).
 const MDPASTE_SLUG_RE = /^[0-9A-Za-z]{16}$/;
 
+// Constant-time string compare (fixed-length digests so length itself leaks
+// nothing either). Used by the read-password gate below.
+function timingSafeStrEqual(a: string, b: string): boolean {
+  const ah = createHash("sha256").update(a).digest();
+  const bh = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ah, bh);
+}
+
 // Extract the source paste slug from a job's backdropRef, iff it is a md-paste
 // paste URL (https://paste.codechill.io/p/<slug>). Query (?raw=1) is ignored.
 function extractMdPasteSlug(ref?: string): string | null {
@@ -552,7 +567,20 @@ app.post("/api/jobs/:id/publish", async (c) => {
 // browser can't pull it directly without a secret in the bundle. Only a
 // server-validated slug is ever forwarded — never a client-supplied URL/host —
 // so this stays a fixed-target proxy, not an open one (no SSRF surface added).
+//
+// Round-2 fix (kobo-1127 review): this proxy re-opened md-paste's own read gate
+// to the internet (any 16-char slug, no auth). Gated here with our OWN read
+// password (MDPASTE_READ_PASSWORD), checked FIRST — before slug shape, before
+// any upstream call — with ONE uniform 401 for missing header / wrong value /
+// gate not configured. An unauthenticated caller therefore cannot distinguish
+// "bad slug" from "wrong password" from "valid slug, no auth" — the existence
+// oracle stays closed the same way md-paste's own gate closes it.
 app.get("/api/external-md/:slug", async (c) => {
+  const supplied = c.req.header("x-mdpaste-read-password") ?? "";
+  if (!MDPASTE_READ_PASSWORD || !timingSafeStrEqual(supplied, MDPASTE_READ_PASSWORD)) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
   const slug = c.req.param("slug");
   if (!MDPASTE_SLUG_RE.test(slug)) return c.json({ error: "bad slug" }, 400);
   if (!MDPASTE_API_KEY) return c.json({ error: "md-paste read proxy not configured" }, 503);
@@ -615,6 +643,9 @@ console.log(`  WEB_DIR  = ${WEB_DIR}`);
 console.log(
   `  post-back = ${MDPASTE_API_KEY ? "ON" : "OFF (no MDPASTE_API_KEY — publish + external-md read skipped)"}` +
     ` → ${MDPASTE_BASE_URL} · public ${PUBLIC_BASE_URL} · append=${POSTBACK_APPEND_MODE} · ttl=${POSTBACK_TTL_HOURS}h`,
+);
+console.log(
+  `  external-md read gate = ${MDPASTE_READ_PASSWORD ? "ON (MDPASTE_READ_PASSWORD set)" : "OFF (no MDPASTE_READ_PASSWORD — /api/external-md/:slug always 401s)"}`,
 );
 console.log(
   `  review-desk = token-only` +

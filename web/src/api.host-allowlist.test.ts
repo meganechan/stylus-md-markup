@@ -4,16 +4,27 @@
 import { test, expect, mock } from "bun:test";
 import { fetchExternalMd } from "./api";
 
-test("accepts an allowlisted md-paste URL and proxies through our own backend", async () => {
+test("accepts an allowlisted md-paste URL, prompts once for the read password, and sends it as a header", async () => {
   const calls: string[] = [];
-  globalThis.fetch = mock(async (url: string) => {
+  const headers: string[] = [];
+  globalThis.prompt = mock(() => "s3cr3t") as unknown as typeof prompt;
+  globalThis.fetch = mock(async (url: string, init?: RequestInit) => {
     calls.push(String(url));
+    headers.push((init?.headers as Record<string, string> | undefined)?.["x-mdpaste-read-password"] ?? "");
     return new Response("hello", { status: 200 });
   }) as unknown as typeof fetch;
 
   const text = await fetchExternalMd("https://paste.codechill.io/p/4tFxc2i6FDOhozh4");
   expect(text).toBe("hello");
   expect(calls).toEqual(["/api/external-md/4tFxc2i6FDOhozh4"]);
+  expect(headers).toEqual(["s3cr3t"]);
+});
+
+test("clears the cached read password and throws a clear error on 401", async () => {
+  globalThis.prompt = mock(() => "wrong-pass") as unknown as typeof prompt;
+  globalThis.fetch = mock(async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch;
+
+  await expect(fetchExternalMd("https://paste.codechill.io/p/4tFxc2i6FDOhozh4")).rejects.toThrow(/รหัสผ่าน/);
 });
 
 test("rejects a non-allowlisted host (e.g. the old te-kb host)", async () => {

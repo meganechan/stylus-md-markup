@@ -34,8 +34,8 @@ export interface JobManifest {
   appendedTo: { slug: string; url: string; appendedAt: string } | null;
 }
 
-// Post-back: publish a saved job to te-kb as a paste (server-side). The token
-// is server-only; this just triggers it. Returns the te-kb url or a skip/error.
+// Post-back: publish a saved job to md-paste as a paste (server-side). The token
+// is server-only; this just triggers it. Returns the md-paste url or a skip/error.
 export interface PublishResult {
   published: boolean;
   mode?: "append" | "new"; // appended to source paste, or created a new paste
@@ -68,6 +68,35 @@ export async function loadDoc(path: string): Promise<DocPayload> {
 const ALLOWED_SRC_HOSTS = ["paste.codechill.io"];
 const MDPASTE_SLUG_RE = /^\/p\/([0-9A-Za-z]{16})$/;
 
+// Read password for our own GET /api/external-md/:slug gate (kobo-1127 round-2
+// fix). Prompted once, cached in sessionStorage (NOT localStorage — cleared when
+// the tab closes, not written to disk). Storage is per-viewer convenience only,
+// so reads/writes are wrapped: a private tab / blocked site data must not crash
+// the flow, just re-prompt.
+const READ_PASSWORD_KEY = "mdpaste-read-password";
+
+function getCachedReadPassword(): string | null {
+  try {
+    return sessionStorage.getItem(READ_PASSWORD_KEY);
+  } catch {
+    return null;
+  }
+}
+function setCachedReadPassword(v: string) {
+  try {
+    sessionStorage.setItem(READ_PASSWORD_KEY, v);
+  } catch {
+    /* best-effort — falls back to re-prompting next time */
+  }
+}
+function clearCachedReadPassword() {
+  try {
+    sessionStorage.removeItem(READ_PASSWORD_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function fetchExternalMd(rawUrl: string): Promise<string> {
   let u: URL;
   try {
@@ -83,14 +112,28 @@ export async function fetchExternalMd(rawUrl: string): Promise<string> {
   if (!m) throw new Error("URL ไม่ถูกต้อง");
   const slug = m[1];
 
+  let password = getCachedReadPassword();
+  if (!password) {
+    password = prompt("รหัสผ่านสำหรับอ่าน paste (read password):");
+    if (!password) throw new Error("ต้องใส่รหัสผ่านเพื่ออ่าน paste");
+    setCachedReadPassword(password);
+  }
+
   let res: Response;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    res = await fetch(`/api/external-md/${slug}`, { signal: ctrl.signal });
+    res = await fetch(`/api/external-md/${slug}`, {
+      signal: ctrl.signal,
+      headers: { "x-mdpaste-read-password": password },
+    });
     clearTimeout(timer);
   } catch {
     throw new Error("ดึง paste ไม่สำเร็จ (network/timeout)");
+  }
+  if (res.status === 401) {
+    clearCachedReadPassword();
+    throw new Error("รหัสผ่านไม่ถูกต้อง (read password ผิด) — ลองใหม่อีกครั้ง");
   }
   if (res.status === 410) throw new Error("paste หมดอายุแล้ว");
   if (res.status === 404) throw new Error("ไม่พบ paste");
