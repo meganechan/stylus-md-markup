@@ -14,8 +14,8 @@ own secret.
         │  Stylus Markup  (surface 1)     │      │  Review Desk  (surface 2)           │
         │  `/`  (index.html)              │      │  `/review` + `/r/:token` (review…)  │
         │  markdown/image backdrop →      │      │  read-only md backdrop + ink overlay │
-        │  annotate → tiles → te-kb       │      │  + comment → Decision → maw          │
-        │  secret: TEKB_PASTE_TOKEN       │      │  secret: MAW_REVIEW_DESK_SECRET      │
+        │  annotate → tiles → md-paste    │      │  + comment → Decision → maw          │
+        │  secret: MDPASTE_API_KEY        │      │  secret: MAW_REVIEW_DESK_SECRET      │
         │  host: ink.notscam.space        │      │  host: review.notscam.space          │
         └─────────────────────────────────┘      └──────────────────────────────────────┘
 ```
@@ -35,7 +35,7 @@ own secret.
 ## Domain 1 — Stylus Markup (`docs` / ADR-0001, 0003–0006 in pm1-oracle)
 
 Review a markdown/image by hand → annotate → bake **Tiles** → store a **Markup
-Job** → post a ref back to **te-kb**. Source is read-only. LIVE: ink.notscam.space.
+Job** → post a ref back to **md-paste**. Source is read-only. LIVE: ink.notscam.space.
 Terminology: Backdrop · Markup Job · Tile · Sidecar. See README.
 
 ## Domain 2 — Review Desk (ADR-0002 below)

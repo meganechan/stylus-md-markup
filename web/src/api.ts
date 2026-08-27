@@ -58,11 +58,15 @@ export async function loadDoc(path: string): Promise<DocPayload> {
   return r.json();
 }
 
-// External markdown Backdrop (te-kb edit button → ?src=<raw-md-url>).
-// Fetched CLIENT-SIDE: te-kb serves CORS '*', so the browser pulls the raw paste
-// directly. Host is allowlisted here before any request (keeps the editor from
-// being abused to fetch arbitrary URLs). raw=1 forces text/plain.
-const ALLOWED_SRC_HOSTS = ["api.kb.notscam.space"];
+// External markdown Backdrop (md-paste edit button → ?src=<paste-url>), kobo-1127.
+// md-paste's public read is password-gated (fails closed) — unlike te-kb's old
+// CORS '*' open read — so this can no longer fetch the raw paste directly from
+// the browser without shipping a secret into the bundle. Host is still
+// allowlisted here (keeps the editor from being abused to accept arbitrary
+// URLs), then only the extracted slug — never the URL/host — is sent to our
+// own backend, which holds the read token server-side (server/index.ts).
+const ALLOWED_SRC_HOSTS = ["paste.codechill.io"];
+const MDPASTE_SLUG_RE = /^\/p\/([0-9A-Za-z]{16})$/;
 
 export async function fetchExternalMd(rawUrl: string): Promise<string> {
   let u: URL;
@@ -75,13 +79,15 @@ export async function fetchExternalMd(rawUrl: string): Promise<string> {
   if (!ALLOWED_SRC_HOSTS.includes(u.hostname)) {
     throw new Error(`host ไม่อยู่ใน allowlist: ${u.hostname}`);
   }
-  if (!u.searchParams.has("raw")) u.searchParams.set("raw", "1");
+  const m = u.pathname.match(MDPASTE_SLUG_RE);
+  if (!m) throw new Error("URL ไม่ถูกต้อง");
+  const slug = m[1];
 
   let res: Response;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    res = await fetch(u.toString(), { signal: ctrl.signal });
+    res = await fetch(`/api/external-md/${slug}`, { signal: ctrl.signal });
     clearTimeout(timer);
   } catch {
     throw new Error("ดึง paste ไม่สำเร็จ (network/timeout)");

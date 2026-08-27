@@ -31,16 +31,17 @@ const WEB_DIR = resolve(process.env.WEB_DIR ?? "./web/dist");
 const PORT = Number(process.env.PORT ?? 8080);
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD ?? 10 * 1024 * 1024); // 10MB
 
-// Post-back to te-kb (ADR-0006). The write token lives ONLY here (server env),
-// never in the frontend. If unset, publishing is skipped silently.
-const TEKB_PASTE_TOKEN = process.env.TEKB_PASTE_TOKEN ?? "";
-const TEKB_BASE_URL = (process.env.TEKB_BASE_URL ?? "https://api.kb.notscam.space").replace(/\/$/, "");
+// Post-back to md-paste (ADR-0006, repointed kobo-1127). The write/read token
+// lives ONLY here (server env), never in the frontend. If unset, publishing is
+// skipped silently, and the external-md read proxy fails closed (503).
+const MDPASTE_API_KEY = process.env.MDPASTE_API_KEY ?? "";
+const MDPASTE_BASE_URL = (process.env.MDPASTE_BASE_URL ?? "https://paste.codechill.io").replace(/\/$/, "");
 // Public origin of THIS service, used to build absolute tile/edit URLs in the paste.
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "https://ink.notscam.space").replace(/\/$/, "");
-// TTL for published pastes (te-kb contract: explicit, clamped [1,2160]). Markup is
-// a review artifact we want to keep ~30d. Tunable via env without rebuild.
+// TTL for published pastes (md-paste contract: explicit, clamped [1, pasteMaxTtlHours=2160]).
+// Markup is a review artifact we want to keep ~30d. Tunable via env without rebuild.
 const POSTBACK_TTL_HOURS = Number(process.env.POSTBACK_TTL_HOURS ?? 720);
-// te-kb paste content cap (contract): 1MB. We guard before sending.
+// md-paste paste content cap (contract): 1MB. We guard before sending.
 const PASTE_CONTENT_CAP = 1024 * 1024;
 // Save KB appends a ref into the source paste. "once" = one ref per job (skip
 // re-append on repeat saves — the ref links to /j/id which already shows latest
@@ -101,10 +102,12 @@ app.get("/api/doc", async (c) => {
   }
 });
 
-// NOTE: external markdown (?src=, te-kb edit button) is fetched CLIENT-SIDE.
-// te-kb serves CORS '*' so the browser fetches the raw paste directly, host-
-// validated in the editor (api.kb.notscam.space) — no server proxy, so this
-// backend never makes outbound requests (smaller SSRF surface). See web/src/api.ts.
+// NOTE: external markdown (?src=, md-paste edit button) is fetched via the
+// GET /api/external-md/:slug proxy below. md-paste's public read (GET /p/:slug)
+// is password-gated and fails closed (unlike te-kb's old CORS '*' open read), so
+// the browser cannot pull it directly without shipping a secret into the bundle.
+// The proxy takes a validated slug (never a client-supplied URL/host) and forwards
+// it server-side with the same Bearer key used for publish/append. See web/src/api.ts.
 
 // GET /static/* — serve DOCS_DIR so a markdown Backdrop's local images load.
 app.get("/static/*", async (c) => {
@@ -133,7 +136,7 @@ interface AppendRef {
   slug: string; // source paste slug we appended a ref into
   url: string; // source paste url
   appendedAt: string;
-  expiresAt?: string; // te-kb extends TTL on append
+  expiresAt?: string; // md-paste extends TTL on append
 }
 interface JobManifest {
   id: string;
@@ -379,7 +382,7 @@ function firstHeading(md: string): string | null {
   return m ? m[1].trim().slice(0, 120) : null;
 }
 
-// Build the markdown body of the te-kb paste from a job (md text + Tiles + edit link).
+// Build the markdown body of the md-paste paste from a job (md text + Tiles + edit link).
 function buildPasteMarkdown(m: JobManifest, mdText: string | null, strokeCount: number): string {
   const tileUrls = Array.from(
     { length: m.tileCount },
@@ -394,26 +397,36 @@ function buildPasteMarkdown(m: JobManifest, mdText: string | null, strokeCount: 
   return `# ${markHeader}\n\n${tilesMd}\n\n${editLink}\n`;
 }
 
-// Authenticated POST to te-kb (Bearer token + 10s timeout).
-function tekbPost(url: string, body: unknown): Promise<Response> {
+// Authenticated request to md-paste (Bearer token + 10s timeout).
+function mdPasteFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 10000);
   return fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${TEKB_PASTE_TOKEN}` },
-    body: JSON.stringify(body),
+    ...init,
+    headers: { ...(init.headers ?? {}), authorization: `Bearer ${MDPASTE_API_KEY}` },
     signal: ctrl.signal,
   }).finally(() => clearTimeout(timer));
 }
 
-// Extract the source paste slug from a job's backdropRef, iff it is a te-kb
-// paste URL (https://api.kb.notscam.space/p/<slug>). Query (?raw=1) is ignored.
-function extractTekbSlug(ref?: string): string | null {
+function mdPastePost(url: string, body: unknown): Promise<Response> {
+  return mdPasteFetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// md-paste slugs are exactly 16 base62 chars (server-side contract).
+const MDPASTE_SLUG_RE = /^[0-9A-Za-z]{16}$/;
+
+// Extract the source paste slug from a job's backdropRef, iff it is a md-paste
+// paste URL (https://paste.codechill.io/p/<slug>). Query (?raw=1) is ignored.
+function extractMdPasteSlug(ref?: string): string | null {
   if (!ref) return null;
   try {
     const u = new URL(ref);
-    if (u.hostname !== "api.kb.notscam.space") return null;
-    const m = u.pathname.match(/^\/p\/([A-Za-z0-9]{8,32})$/);
+    if (u.hostname !== "paste.codechill.io") return null;
+    const m = u.pathname.match(/^\/p\/([0-9A-Za-z]{16})$/);
     return m ? m[1] : null;
   } catch {
     return null;
@@ -437,8 +450,8 @@ function buildRefBlock(m: JobManifest): string {
   return `\n\n---\n✏️ Markup (${fmtBangkok(m.createdAt)}): [ดู](${view}) · [แก้ไข](${edit})`;
 }
 
-// Fallback path (no source paste, or source expired): create a NEW te-kb paste
-// with the full markup content. Returns the Hono response.
+// Fallback path (no source paste, or source expired): create a NEW md-paste
+// paste with the full markup content. Returns the Hono response.
 async function createNewPaste(c: Context, m: JobManifest, dir: string, id: string) {
   const strokeCount = await countStrokes(dir);
   let mdText: string | null = null;
@@ -451,23 +464,23 @@ async function createNewPaste(c: Context, m: JobManifest, dir: string, id: strin
   }
   const content = buildPasteMarkdown(m, mdText, strokeCount);
   if (Buffer.byteLength(content, "utf8") > PASTE_CONTENT_CAP) {
-    return c.json({ published: false, error: "content exceeds te-kb 1MB cap" }, 413);
+    return c.json({ published: false, error: "content exceeds md-paste 1MB cap" }, 413);
   }
   const title = ((mdText && firstHeading(mdText)) || `Stylus Markup ${id}`).slice(0, 200);
   let res: Response;
   try {
-    res = await tekbPost(`${TEKB_BASE_URL}/paste`, { content, title, ttl_hours: POSTBACK_TTL_HOURS });
+    res = await mdPastePost(`${MDPASTE_BASE_URL}/paste`, { content, title, ttl_hours: POSTBACK_TTL_HOURS });
   } catch (e) {
-    return c.json({ published: false, error: "te-kb unreachable: " + (e as Error).message }, 502);
+    return c.json({ published: false, error: "md-paste unreachable: " + (e as Error).message }, 502);
   }
-  if (!res.ok) return c.json({ published: false, error: `te-kb responded ${res.status}` }, 502);
+  if (!res.ok) return c.json({ published: false, error: `md-paste responded ${res.status}` }, 502);
   const data = (await res.json().catch(() => ({}))) as {
     slug?: string;
     url?: string;
     expires_at?: string;
   };
-  const url = data.url ?? (data.slug ? `${TEKB_BASE_URL}/p/${data.slug}` : null);
-  if (!url) return c.json({ published: false, error: "te-kb response missing url/slug" }, 502);
+  const url = data.url ?? (data.slug ? `${MDPASTE_BASE_URL}/p/${data.slug}` : null);
+  if (!url) return c.json({ published: false, error: "md-paste response missing url/slug" }, 502);
   const ref: PasteRef = {
     slug: data.slug ?? "",
     url,
@@ -480,21 +493,22 @@ async function createNewPaste(c: Context, m: JobManifest, dir: string, id: strin
   return c.json({ published: true, mode: "new", url, slug: ref.slug, expiresAt: data.expires_at });
 }
 
-// POST /api/jobs/:id/publish — Save KB post-back (ADR-0006). Append a dated ref
-// into the SOURCE paste (slug from ?src) so the markup shows under the original;
-// fall back to creating a new paste when there is no source (image/local) or the
-// source paste has expired. Server-side only — the token never reaches the browser.
-//   - no token            -> { published:false, reason:"no-token" } (200)
-//   - te-kb failure        -> { published:false, error } (502); the local job is intact
+// POST /api/jobs/:id/publish — Save KB post-back (ADR-0006, repointed kobo-1127).
+// Append a dated ref into the SOURCE paste (slug from ?src) so the markup shows
+// under the original; fall back to creating a new paste when there is no source
+// (image/local) or the source paste has expired. Server-side only — the token
+// never reaches the browser.
+//   - no token             -> { published:false, reason:"no-token" } (200)
+//   - md-paste failure      -> { published:false, error } (502); the local job is intact
 app.post("/api/jobs/:id/publish", async (c) => {
   const id = c.req.param("id");
   const m = await loadManifest(id);
   if (!m) return c.json({ error: "not found" }, 404);
   const dir = jobDir(id)!;
 
-  if (!TEKB_PASTE_TOKEN) return c.json({ published: false, reason: "no-token" });
+  if (!MDPASTE_API_KEY) return c.json({ published: false, reason: "no-token" });
 
-  const sourceSlug = extractTekbSlug(m.backdropRef);
+  const sourceSlug = extractMdPasteSlug(m.backdropRef);
 
   // No source paste (image upload / local ?doc) → create a new paste.
   if (!sourceSlug) return createNewPaste(c, m, dir, id);
@@ -509,17 +523,17 @@ app.post("/api/jobs/:id/publish", async (c) => {
   const refBlock = buildRefBlock(m);
   let res: Response;
   try {
-    res = await tekbPost(`${TEKB_BASE_URL}/paste/${sourceSlug}/append`, { content: refBlock });
+    res = await mdPastePost(`${MDPASTE_BASE_URL}/paste/${sourceSlug}/append`, { content: refBlock });
   } catch (e) {
-    return c.json({ published: false, error: "te-kb unreachable: " + (e as Error).message }, 502);
+    return c.json({ published: false, error: "md-paste unreachable: " + (e as Error).message }, 502);
   }
   // source paste gone/expired → fall back to a fresh paste (append-only API 404s)
   if (res.status === 404) return createNewPaste(c, m, dir, id);
-  if (!res.ok) return c.json({ published: false, error: `te-kb append responded ${res.status}` }, 502);
+  if (!res.ok) return c.json({ published: false, error: `md-paste append responded ${res.status}` }, 502);
 
-  // 200 { slug, url, expires_at, images } — prefer te-kb's own url (contract)
+  // 200 { slug, url, expires_at, images } — prefer md-paste's own url (contract)
   const data = (await res.json().catch(() => ({}))) as { url?: string; expires_at?: string };
-  const pasteUrl = data.url ?? `${TEKB_BASE_URL}/p/${sourceSlug}`;
+  const pasteUrl = data.url ?? `${MDPASTE_BASE_URL}/p/${sourceSlug}`;
   const ref: AppendRef = {
     slug: sourceSlug,
     url: pasteUrl,
@@ -531,6 +545,31 @@ app.post("/api/jobs/:id/publish", async (c) => {
   await writeFile(join(dir, "job.json"), JSON.stringify(m, null, 2), "utf8");
   console.log(`appended job ${id} ref -> ${pasteUrl} (slug ${sourceSlug})`);
   return c.json({ published: true, mode: "append", url: pasteUrl, slug: sourceSlug, expiresAt: data.expires_at });
+});
+
+// GET /api/external-md/:slug — read proxy for the "?src=" edit button (kobo-1127).
+// md-paste's public GET /p/:slug is password-gated and fails closed, so the
+// browser can't pull it directly without a secret in the bundle. Only a
+// server-validated slug is ever forwarded — never a client-supplied URL/host —
+// so this stays a fixed-target proxy, not an open one (no SSRF surface added).
+app.get("/api/external-md/:slug", async (c) => {
+  const slug = c.req.param("slug");
+  if (!MDPASTE_SLUG_RE.test(slug)) return c.json({ error: "bad slug" }, 400);
+  if (!MDPASTE_API_KEY) return c.json({ error: "md-paste read proxy not configured" }, 503);
+
+  let res: Response;
+  try {
+    res = await mdPasteFetch(`${MDPASTE_BASE_URL}/api/paste/${slug}`);
+  } catch (e) {
+    return c.json({ error: "md-paste unreachable: " + (e as Error).message }, 502);
+  }
+  if (res.status === 404) return c.json({ error: "not found" }, 404);
+  if (res.status === 410) return c.json({ error: "paste expired" }, 410);
+  if (!res.ok) return c.json({ error: `md-paste responded ${res.status}` }, 502);
+
+  const data = (await res.json().catch(() => ({}))) as { md?: string };
+  if (typeof data.md !== "string") return c.json({ error: "md-paste response missing md" }, 502);
+  return new Response(data.md, { headers: { "content-type": "text/markdown; charset=utf-8" } });
 });
 
 // GET /j/:id — minimal human-facing "result" page (tiles + md link) to paste/host.
@@ -574,8 +613,8 @@ console.log(`  DOCS_DIR = ${DOCS_DIR} (read-only backdrop source)`);
 console.log(`  JOBS_DIR = ${JOBS_DIR} (markup jobs)`);
 console.log(`  WEB_DIR  = ${WEB_DIR}`);
 console.log(
-  `  post-back = ${TEKB_PASTE_TOKEN ? "ON" : "OFF (no TEKB_PASTE_TOKEN — publish skipped)"}` +
-    ` → ${TEKB_BASE_URL} · public ${PUBLIC_BASE_URL} · append=${POSTBACK_APPEND_MODE} · ttl=${POSTBACK_TTL_HOURS}h`,
+  `  post-back = ${MDPASTE_API_KEY ? "ON" : "OFF (no MDPASTE_API_KEY — publish + external-md read skipped)"}` +
+    ` → ${MDPASTE_BASE_URL} · public ${PUBLIC_BASE_URL} · append=${POSTBACK_APPEND_MODE} · ttl=${POSTBACK_TTL_HOURS}h`,
 );
 console.log(
   `  review-desk = token-only` +
