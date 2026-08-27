@@ -10,10 +10,15 @@ services:
       - PORT=8080
       - DOCS_DIR=/docs
       - JOBS_DIR=/jobs
-      # post-back to te-kb (ADR-0006). TEKB_PASTE_TOKEN is a secret injected at
-      # runtime (coolify) — never commit it. Without it, publish is skipped.
-      - TEKB_PASTE_TOKEN=${TEKB_PASTE_TOKEN:-}
-      - TEKB_BASE_URL=${TEKB_BASE_URL:-https://api.kb.notscam.space}
+      # post-back to md-paste (ADR-0006, repointed kobo-1127). MDPASTE_API_KEY is
+      # a secret injected at runtime (coolify) — never commit it. Without it,
+      # publish AND the "?src=" external-md read proxy are both skipped.
+      - MDPASTE_API_KEY=${MDPASTE_API_KEY:-}
+      # Read gate on OUR OWN GET /api/external-md/:slug proxy (kobo-1127 round-2).
+      # Without this, the proxy is an unauthenticated internet-facing bypass of
+      # md-paste's own read gate. Unset -> the proxy always 401s. Secret, never commit.
+      - MDPASTE_READ_PASSWORD=${MDPASTE_READ_PASSWORD:-}
+      - MDPASTE_BASE_URL=${MDPASTE_BASE_URL:-https://paste.codechill.io}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://ink.notscam.space}
       - POSTBACK_TTL_HOURS=${POSTBACK_TTL_HOURS:-720}
       # "once" = 1 ref per job (skip re-append on repeat saves); "always" = history

@@ -1,21 +1,21 @@
 # Stylus Markup Service
 
 > **2 surfaces, 1 repo, 1 ink engine** (ADR-0002 · ดู `CONTEXT-MAP.md`):
-> **Stylus Markup** (`/`) — วาดรีวิวบน Backdrop → Markup Job → te-kb · **Review Desk** (`/review`) — approval gate: md read-only + ink + comment → Decision → maw.
+> **Stylus Markup** (`/`) — วาดรีวิวบน Backdrop → Markup Job → md-paste · **Review Desk** (`/review`) — approval gate: md read-only + ink + comment → Decision → maw.
 
 ## Stylus Markup (surface 1)
 
-> วาดรีวิวด้วยลายมือบน **Backdrop** (markdown หรือรูป) → เก็บเป็น **Markup Job** บน server → consumer (คน · Claude · te-kb) มา pull.
+> วาดรีวิวด้วยลายมือบน **Backdrop** (markdown หรือรูป) → เก็บเป็น **Markup Job** บน server → consumer (คน · Claude · md-paste) มา pull.
 > ต้นฉบับ Backdrop **read-only** · strokes เป็น vector (แก้ต่อได้) · baked tiles ≤1500px ให้ vision อ่านคม · ไม่มี OCR.
 > v2 ของ POC `stylus-md-markup`. ศัพท์/เหตุผล: `CONTEXT.md` + ADR-0001..0005 (pm1-oracle).
 
 ## Spine
 
 ```
-Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
+Backdrop (render md  |  upload รูป  |  ดึง md จาก md-paste ?src)
   → Stylus editor วาด Ink Overlay (vector strokes, ไม่พึ่ง pressure)
   → Save = สร้าง Markup Job: { strokes + backdrop + md text? + baked tiles }
-  → consumer pull:  คน/Claude = tiles + md-text link · te-kb = host tiles + ลิงก์ md
+  → consumer pull:  คน/Claude = tiles + md-text link · md-paste = host tiles + ลิงก์ md
 ```
 
 ## Editor (no sidebar) — เปิด Backdrop ทีละตัว
@@ -23,7 +23,7 @@ Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
 | เปิดด้วย | ความหมาย |
 |----------|----------|
 | `?doc=<path>` | markdown จาก mount (DOCS_DIR, read-only) |
-| `?src=<raw-md-url>` | markdown ภายนอกจาก te-kb (ปุ่ม edit) — fetch client-side, host allowlist `api.kb.notscam.space`, ใส่ `?raw=1`, จัดการ 410/404 |
+| `?src=<paste-url>` | markdown ภายนอกจาก md-paste (ปุ่ม edit) — host allowlist `paste.codechill.io`, browser เรียกผ่าน server proxy `GET /api/external-md/:slug` (md-paste read ต้อง auth, ไม่ fetch ตรงจาก browser อีกต่อไป), จัดการ 410/404 |
 | `?job=<id>` | เปิด Markup Job เดิม — strokes กลับมาแก้ต่อได้ |
 | ไม่มี param | หน้า intake → อัปโหลดรูปเป็น Source Image |
 
@@ -45,8 +45,9 @@ Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
 | GET | `/api/jobs/:id/strokes` | vector Ink Overlay (เปิดแก้ต่อ) |
 | GET | `/api/jobs/:id/backdrop` | Source Image (image job) |
 | GET | `/api/jobs/:id/tiles/:n` | baked Tile png |
-| POST | `/api/jobs/:id/publish` | post-back: สร้าง paste ใน te-kb (md+tiles+edit link) คืน url (ADR-0006) |
+| POST | `/api/jobs/:id/publish` | post-back: สร้าง paste ใน md-paste (md+tiles+edit link) คืน url (ADR-0006) |
 | GET | `/j/:id` | หน้า result สรุป (tiles + ลิงก์ md) ให้คนเปิด/แปะ |
+| GET | `/api/external-md/:slug` | proxy อ่าน md-paste แบบ server-side (Bearer อยู่ server) ให้ `?src=` fetch ได้ (kobo-1127) |
 
 **Output reps (ADR-0003)**: (i) vector strokes = ความจริง · (ii) baked tiles ≤1500px (long-edge) · (iii) md text เก็บ server.
 
@@ -54,11 +55,13 @@ Backdrop (render md  |  upload รูป  |  ดึง md จาก te-kb ?src)
 
 **Env**: `DOCS_DIR` (md backdrop, :ro) · `JOBS_DIR` (job store, default `./jobs-data`) · `PORT` (8080) · `MAX_UPLOAD` (10MB).
 
-**Post-back to te-kb (ADR-0006)** — ปุ่ม **Save KB** = save job (bake tiles) + ลง te-kb. **server-side** ล้วน; token อยู่ env เท่านั้น ไม่โผล่ frontend.
+**Post-back to md-paste (ADR-0006, repointed kobo-1127)** — ปุ่ม **Save KB** = save job (bake tiles) + ลง md-paste. **server-side** ล้วน; token อยู่ env เท่านั้น ไม่โผล่ frontend. Token เดียวกัน (`MDPASTE_API_KEY`) ใช้ทั้ง publish/append และ `/api/external-md/:slug` read proxy.
 - **เคสเปิดจาก `?src` (มี source paste)** → **append ref เข้า paste เดิม**: บล็อก `✏️ Markup (<วันสร้าง ink, +07>): [ดู](/j/id) · [แก้ไข](/?job=id)` ผ่าน `POST /paste/:slug/append`. **1 ref ต่อ job** (Save ซ้ำ = skip append, /j/id โชว์ tiles ล่าสุดอยู่แล้ว) — flip เป็น history ได้ด้วย `POSTBACK_APPEND_MODE=always`
 - **เคสไม่มี source (upload รูป / `?doc` local) หรือ source หมดอายุ (append 404)** → **fallback สร้าง paste ใหม่** (md+tiles+edit link)
-- Env: `TEKB_PASTE_TOKEN` (paste-only; ไม่ตั้ง → skip เงียบ, job ยังเซฟ) · `TEKB_BASE_URL` (`api.kb.notscam.space`) · `PUBLIC_BASE_URL` (`ink.notscam.space`) · `POSTBACK_TTL_HOURS` (720, clamp [1,2160]) · `POSTBACK_APPEND_MODE` (`once`|`always`)
+- Env: `MDPASTE_API_KEY` (publish + read proxy; ไม่ตั้ง → skip เงียบ, job ยังเซฟ) · `MDPASTE_BASE_URL` (`paste.codechill.io`) · `PUBLIC_BASE_URL` (`ink.notscam.space`) · `POSTBACK_TTL_HOURS` (720, clamp [1,2160]) · `POSTBACK_APPEND_MODE` (`once`|`always`)
 - records ใน job: `appendedTo` (1-ref) + `appends[]` / `pastes[]` history (Nothing-is-Deleted) · publish ล้ม → job local ยังอยู่
+- md-paste's public read (`GET /p/:slug`) เป็น password-gated (fail closed) ไม่ใช่ CORS `*` เปิดแบบ te-kb เดิม ⇒ `?src=` edit button อ่านผ่าน server proxy `GET /api/external-md/:slug` แทนการ fetch ตรงจาก browser
+- **`GET /api/external-md/:slug` read gate (kobo-1127 round-2)** — proxy นี้ถือ Bearer key ที่อ่านได้ทุก slug บน md-paste แบบไม่ scope ต่อเจ้าของ ⇒ ถ้าเปิดเฉยๆ จะกลายเป็นช่องอ่านทุก paste บน md-paste แบบไม่ auth ผ่าน stylus. Gate ด้วย `MDPASTE_READ_PASSWORD` (header `x-mdpaste-read-password`, timing-safe compare) เช็ค**ก่อน**ตรวจ slug/เรียก upstream ใดๆ — ไม่ตั้งค่า หรือ header ผิด/ไม่มี → 401 เดียวกันหมด (ไม่แยก 400/404/410 ให้คนไม่ auth เห็น ปิด existence oracle เหมือน md-paste เอง) · browser ฝั่ง `web/src/api.ts` prompt รหัสครั้งเดียว แคชใน `sessionStorage`, ผิด → เคลียร์แคช + แจ้ง error (ไม่วน retry เอง)
 
 ## Run — Docker
 
@@ -79,7 +82,7 @@ cd web && bun install && bun run dev                            # :5173 (proxy /
 ## เครื่องมือ (Standard pen toolset)
 
 ปากกา · สี ดำ/แดง/น้ำเงิน · ไฮไลต์ · ยางลบ (stroke-level) · ปรับหนา · undo/redo · ล้าง ·
-✋ นิ้ว วาด/เลื่อน · ⊕ พอดีจอ · ⬇️ PNG · 💾 Save KB (save job + ลง te-kb).
+✋ นิ้ว วาด/เลื่อน · ⊕ พอดีจอ · ⬇️ PNG · 💾 Save KB (save job + ลง md-paste).
 Pan/zoom = 2 นิ้ว (ใช้ได้ขณะปากกาวาด) · desktop ⌘/Ctrl+scroll = zoom · ⌘/Ctrl+S = save.
 
 ## Acceptance v2 (mapping)
@@ -93,7 +96,7 @@ Pan/zoom = 2 นิ้ว (ใช้ได้ขณะปากกาวาด) 
 | 5 | เปิด job เดิม → แก้เส้นต่อได้ | `openJob` · `/strokes` |
 | 6 | ต้นฉบับ backdrop ไม่ mutate | docs :ro · job store แยก |
 | 7 | image UI (ไม่มี md) → tiles อย่างเดียว | image job · `/md` = 404 |
-| + | te-kb edit: `?src` external md (allowlist + 410/404) | `api.ts fetchExternalMd` |
+| + | md-paste edit: `?src` external md (allowlist + server proxy + 410/404) | `api.ts fetchExternalMd` |
 
 ## Out of scope (worker1)
 
